@@ -346,42 +346,45 @@ func (c *QQChannel) waitForConnection(ctx context.Context) {
 	heartbeatTicker := time.NewTicker(time.Duration(c.heartbeatInt) * time.Millisecond)
 	defer heartbeatTicker.Stop()
 
-	// 消息处理循环
-	done := make(chan struct{})
+	// 消息读取通道
+	messageChan := make(chan []byte, 100)
+	errorChan := make(chan error, 1)
+
+	// 单独的 goroutine 读取消息
 	go func() {
-		defer close(done)
 		for {
-			select {
-			case <-ctx.Done():
+			c.connMu.Lock()
+			currentConn := c.conn
+			c.connMu.Unlock()
+
+			if currentConn == nil {
+				errorChan <- fmt.Errorf("connection closed")
 				return
-			case <-heartbeatTicker.C:
-				c.sendHeartbeat()
-			default:
-				c.connMu.Lock()
-				currentConn := c.conn
-				c.connMu.Unlock()
-
-				if currentConn == nil {
-					return
-				}
-
-				_, message, err := currentConn.ReadMessage()
-				if err != nil {
-					logger.Warn("WebSocket read error", zap.Error(err))
-					return
-				}
-
-				c.handleMessage(message)
 			}
+
+			_, message, err := currentConn.ReadMessage()
+			if err != nil {
+				errorChan <- err
+				return
+			}
+			messageChan <- message
 		}
 	}()
 
-	// 等待上下文取消或连接关闭
-	select {
-	case <-ctx.Done():
-		c.closeConnection()
-	case <-done:
-		// 连接已关闭
+	// 消息处理循环
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("QQ WebSocket context cancelled")
+			return
+		case <-heartbeatTicker.C:
+			c.sendHeartbeat()
+		case message := <-messageChan:
+			c.handleMessage(message)
+		case err := <-errorChan:
+			logger.Warn("WebSocket read error", zap.Error(err))
+			return
+		}
 	}
 }
 
