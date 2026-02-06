@@ -117,7 +117,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 
 	// 注册文件系统工具
-	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths)
+	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspace)
 	for _, tool := range fsTool.GetTools() {
 		if err := toolRegistry.Register(tool); err != nil {
 			logger.Warn("Failed to register tool", zap.String("tool", tool.Name()))

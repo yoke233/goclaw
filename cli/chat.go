@@ -3,17 +3,16 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/chzyer/readline"
 	"github.com/smallnest/dogclaw/goclaw/agent"
 	"github.com/smallnest/dogclaw/goclaw/agent/tools"
 	"github.com/smallnest/dogclaw/goclaw/bus"
 	"github.com/smallnest/dogclaw/goclaw/cli/commands"
+	"github.com/smallnest/dogclaw/goclaw/cli/input"
 	"github.com/smallnest/dogclaw/goclaw/config"
 	"github.com/smallnest/dogclaw/goclaw/internal/logger"
 	"github.com/smallnest/dogclaw/goclaw/providers"
@@ -101,7 +100,7 @@ func runChat(cmd *cobra.Command, args []string) {
 	}
 
 	// 注册文件系统工具
-	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths)
+	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspace)
 	for _, tool := range fsTool.GetTools() {
 		_ = toolRegistry.Register(tool)
 	}
@@ -173,20 +172,6 @@ func runChat(cmd *cobra.Command, args []string) {
 		os.Exit(0)
 	}()
 
-	// 主循环 - 使用 readline 提供更好的输入体验
-	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          "➤ ",
-		HistoryFile:     os.Getenv("HOME") + "/.goclaw/history",
-		HistoryLimit:    1000,
-		InterruptPrompt: "^C",
-		EOFPrompt:       "^D",
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create readline: %v\n", err)
-		os.Exit(1)
-	}
-	defer rl.Close()
-
 	// 如果开启 debug-prompt，打印完整的 system prompt
 	if chatDebugPrompt {
 		fmt.Println("=== Debug: System Prompt ===")
@@ -196,25 +181,16 @@ func runChat(cmd *cobra.Command, args []string) {
 		fmt.Println("=== End of System Prompt ===")
 	}
 
+	// 主循环 - 使用 bubbletea 输入（支持中文宽字符）
+	var history []string
+
 	for {
 		// 读取输入
-		input, err := rl.Readline()
+		input, err := input.ReadLine("➤ ")
 		if err != nil {
-			if err == readline.ErrInterrupt {
-				if input == "" {
-					// Ctrl-C on empty line - exit
-					fmt.Println("\nGoodbye!")
-					break
-				}
-				// Ctrl-C with input - clear input and continue
-				continue
-			}
-			if err == io.EOF {
-				fmt.Println("\nGoodbye!")
-				break
-			}
-			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-			continue
+			// 用户按 Ctrl+C 或 Ctrl+D
+			fmt.Println("\nGoodbye!")
+			break
 		}
 
 		input = strings.TrimSpace(input)
@@ -239,6 +215,11 @@ func runChat(cmd *cobra.Command, args []string) {
 
 		if input == "" {
 			continue
+		}
+
+		// 保存到历史记录
+		if input != "" {
+			history = append(history, input)
 		}
 
 		// 添加用户消息

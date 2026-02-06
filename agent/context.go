@@ -244,7 +244,7 @@ Tool names are case-sensitive. Call tools exactly as listed.`, now.Format("2006-
 func (b *ContextBuilder) loadBootstrapFiles() string {
 	var parts []string
 
-	files := []string{"AGENTS.md", "SOUL.md", "USER.md"}
+	files := []string{"IDENTITY.md", "AGENTS.md", "SOUL.md", "USER.md"}
 	for _, filename := range files {
 		if content, err := b.memory.ReadBootstrapFile(filename); err == nil && content != "" {
 			parts = append(parts, fmt.Sprintf("### %s\n\n%s", filename, content))

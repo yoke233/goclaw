@@ -168,6 +168,7 @@ func (m *MemoryStore) EnsureBootstrapFiles() error {
 
 	// bootstrap 文件列表
 	bootstrapFiles := []string{
+		"IDENTITY.md",
 		"AGENTS.md",
 		"SOUL.md",
 		"USER.md",
@@ -179,6 +180,8 @@ func (m *MemoryStore) EnsureBootstrapFiles() error {
 			// 创建默认内容
 			var defaultContent string
 			switch filename {
+			case "IDENTITY.md":
+				defaultContent = "# Identity\n\nThis file defines the agent's identity and character."
 			case "AGENTS.md":
 				defaultContent = "# Agent Configuration\n\nThis file defines the agent's capabilities and configuration."
 			case "SOUL.md":
