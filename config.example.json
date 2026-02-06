@@ -1,0 +1,71 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "gpt-4",
+      "max_iterations": 15,
+      "temperature": 0.7,
+      "max_tokens": 4096
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "",
+      "allowed_ids": []
+    },
+    "whatsapp": {
+      "enabled": false,
+      "bridge_url": "",
+      "allowed_ids": []
+    },
+    "feishu": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "encrypt_key": "",
+      "verification_token": ""
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "api_key": "",
+      "base_url": "",
+      "timeout": 30,
+      "max_retries": 3
+    },
+    "openai": {
+      "api_key": "YOUR_OPENAI_API_KEY_HERE",
+      "base_url": "",
+      "timeout": 30
+    },
+    "anthropic": {
+      "api_key": "",
+      "base_url": "",
+      "timeout": 30
+    }
+  },
+  "gateway": {
+    "host": "localhost",
+    "port": 8080,
+    "read_timeout": 30,
+    "write_timeout": 30
+  },
+  "tools": {
+    "filesystem": {
+      "allowed_paths": [],
+      "denied_paths": []
+    },
+    "shell": {
+      "enabled": true,
+      "allowed_cmds": [],
+      "denied_cmds": ["rm -rf", "dd", "mkfs"],
+      "timeout": 30,
+      "working_dir": ""
+    },
+    "web": {
+      "search_api_key": "",
+      "search_engine": "brave",
+      "timeout": 10
+    }
+  }
+}
