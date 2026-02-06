@@ -122,6 +122,7 @@ type ToolsConfig struct {
 	FileSystem FileSystemToolConfig `mapstructure:"filesystem" json:"filesystem"`
 	Shell      ShellToolConfig      `mapstructure:"shell" json:"shell"`
 	Web        WebToolConfig        `mapstructure:"web" json:"web"`
+	Browser    BrowserToolConfig    `mapstructure:"browser" json:"browser"`
 }
 
 // FileSystemToolConfig 文件系统工具配置
@@ -144,4 +145,11 @@ type WebToolConfig struct {
 	SearchAPIKey string `mapstructure:"search_api_key" json:"search_api_key"`
 	SearchEngine string `mapstructure:"search_engine" json:"search_engine"`
 	Timeout      int    `mapstructure:"timeout" json:"timeout"`
+}
+
+// BrowserToolConfig 浏览器工具配置
+type BrowserToolConfig struct {
+	Enabled  bool `mapstructure:"enabled" json:"enabled"`
+	Headless bool `mapstructure:"headless" json:"headless"`
+	Timeout  int  `mapstructure:"timeout" json:"timeout"`
 }

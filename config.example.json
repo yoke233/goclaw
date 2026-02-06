@@ -78,8 +78,13 @@
     },
     "web": {
       "search_api_key": "",
-      "search_engine": "brave",
+      "search_engine": "travily",
       "timeout": 10
+    },
+    "browser": {
+      "enabled": false,
+      "headless": true,
+      "timeout": 30
     }
   }
 }

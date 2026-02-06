@@ -79,6 +79,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.shell.timeout", 120)
 	v.SetDefault("tools.web.search_engine", "travily")
 	v.SetDefault("tools.web.timeout", 10)
+	v.SetDefault("tools.browser.enabled", false)
+	v.SetDefault("browser.headless", true)
+	v.SetDefault("browser.timeout", 30)
 }
 
 // Save 保存配置到文件
@@ -293,6 +296,13 @@ func validateTools(cfg *Config) error {
 
 	if cfg.Tools.Web.Timeout <= 0 {
 		return fmt.Errorf("web timeout must be positive")
+	}
+
+	// 浏览器工具配置验证
+	if cfg.Tools.Browser.Enabled {
+		if cfg.Tools.Browser.Timeout <= 0 {
+			return fmt.Errorf("browser timeout must be positive")
+		}
 	}
 
 	return nil

@@ -125,6 +125,17 @@ func runChat(cmd *cobra.Command, args []string) {
 		_ = toolRegistry.Register(tool)
 	}
 
+	// 注册浏览器工具（如果启用）
+	if cfg.Tools.Browser.Enabled {
+		browserTool := tools.NewBrowserTool(
+			cfg.Tools.Browser.Headless,
+			cfg.Tools.Browser.Timeout,
+		)
+		for _, tool := range browserTool.GetTools() {
+			_ = toolRegistry.Register(tool)
+		}
+	}
+
 	// 创建 LLM 提供商
 	provider, err := providers.NewProvider(cfg)
 	if err != nil {
