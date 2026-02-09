@@ -200,7 +200,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 
 	// 创建网关服务器
-	gatewayServer := gateway.NewServer(&cfg.Gateway, messageBus, channelMgr)
+	gatewayServer := gateway.NewServer(&cfg.Gateway, messageBus, channelMgr, sessionMgr)
 	if err := gatewayServer.Start(ctx); err != nil {
 		logger.Warn("Failed to start gateway server", zap.Error(err))
 	}

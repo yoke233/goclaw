@@ -2,17 +2,19 @@ package agent
 
 import (
 	"strings"
+
+	"github.com/smallnest/dogclaw/goclaw/types"
 )
 
-// FailoverReason 失败原因类型
-type FailoverReason string
+// For backwards compatibility, re-export the types
+type FailoverReason = types.FailoverReason
 
 const (
-	FailoverReasonAuth      FailoverReason = "auth"
-	FailoverReasonRateLimit FailoverReason = "rate_limit"
-	FailoverReasonTimeout   FailoverReason = "timeout"
-	FailoverReasonBilling   FailoverReason = "billing"
-	FailoverReasonUnknown   FailoverReason = "unknown"
+	FailoverReasonAuth      FailoverReason = types.FailoverReasonAuth
+	FailoverReasonRateLimit FailoverReason = types.FailoverReasonRateLimit
+	FailoverReasonTimeout   FailoverReason = types.FailoverReasonTimeout
+	FailoverReasonBilling   FailoverReason = types.FailoverReasonBilling
+	FailoverReasonUnknown   FailoverReason = types.FailoverReasonUnknown
 )
 
 // ErrorClassifier 错误分类器
@@ -26,6 +28,9 @@ type ErrorClassifier struct {
 	// 计费错误模式
 	billingPatterns []string
 }
+
+// Ensure ErrorClassifier implements types.ErrorClassifier
+var _ types.ErrorClassifier = (*ErrorClassifier)(nil)
 
 // NewErrorClassifier 创建错误分类器
 func NewErrorClassifier() *ErrorClassifier {

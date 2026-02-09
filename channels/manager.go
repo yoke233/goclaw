@@ -92,6 +92,35 @@ func (m *Manager) Get(name string) (BaseChannel, bool) {
 	return channel, ok
 }
 
+// List 列出所有通道名称
+func (m *Manager) List() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	names := make([]string, 0, len(m.channels))
+	for name := range m.channels {
+		names = append(names, name)
+	}
+	return names
+}
+
+// Status 获取通道状态
+func (m *Manager) Status(name string) (map[string]interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	channel, ok := m.channels[name]
+	if !ok {
+		return nil, fmt.Errorf("channel not found: %s", name)
+	}
+
+	// 简化的状态信息
+	return map[string]interface{}{
+		"name":    channel.Name(),
+		"enabled": true,
+	}, nil
+}
+
 // DispatchOutbound 分发出站消息
 func (m *Manager) DispatchOutbound(ctx context.Context) error {
 	for {

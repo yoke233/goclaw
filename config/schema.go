@@ -85,6 +85,31 @@ type ProvidersConfig struct {
 	OpenRouter OpenRouterProviderConfig `mapstructure:"openrouter" json:"openrouter"`
 	OpenAI     OpenAIProviderConfig     `mapstructure:"openai" json:"openai"`
 	Anthropic  AnthropicProviderConfig  `mapstructure:"anthropic" json:"anthropic"`
+	Profiles   []ProviderProfileConfig  `mapstructure:"profiles" json:"profiles"`
+	Failover   FailoverConfig           `mapstructure:"failover" json:"failover"`
+}
+
+// ProviderProfileConfig 提供商配置
+type ProviderProfileConfig struct {
+	Name     string `mapstructure:"name" json:"name"`
+	Provider string `mapstructure:"provider" json:"provider"` // openai, anthropic, openrouter
+	APIKey   string `mapstructure:"api_key" json:"api_key"`
+	BaseURL  string `mapstructure:"base_url" json:"base_url"`
+	Priority int    `mapstructure:"priority" json:"priority"`
+}
+
+// FailoverConfig 故障转移配置
+type FailoverConfig struct {
+	Enabled         bool          `mapstructure:"enabled" json:"enabled"`
+	Strategy        string        `mapstructure:"strategy" json:"strategy"` // round_robin, least_used, random
+	DefaultCooldown time.Duration `mapstructure:"default_cooldown" json:"default_cooldown"`
+	CircuitBreaker  CircuitBreakerConfig `mapstructure:"circuit_breaker" json:"circuit_breaker"`
+}
+
+// CircuitBreakerConfig 断路器配置
+type CircuitBreakerConfig struct {
+	FailureThreshold int           `mapstructure:"failure_threshold" json:"failure_threshold"`
+	Timeout          time.Duration `mapstructure:"timeout" json:"timeout"`
 }
 
 // OpenRouterProviderConfig OpenRouter 配置
@@ -111,8 +136,22 @@ type AnthropicProviderConfig struct {
 
 // GatewayConfig 网关配置
 type GatewayConfig struct {
+	Host         string            `mapstructure:"host" json:"host"`
+	Port         int               `mapstructure:"port" json:"port"`
+	ReadTimeout  time.Duration     `mapstructure:"read_timeout" json:"read_timeout"`
+	WriteTimeout time.Duration     `mapstructure:"write_timeout" json:"write_timeout"`
+	WebSocket    WebSocketConfig   `mapstructure:"websocket" json:"websocket"`
+}
+
+// WebSocketConfig WebSocket 配置
+type WebSocketConfig struct {
 	Host         string        `mapstructure:"host" json:"host"`
 	Port         int           `mapstructure:"port" json:"port"`
+	Path         string        `mapstructure:"path" json:"path"`
+	EnableAuth   bool          `mapstructure:"enable_auth" json:"enable_auth"`
+	AuthToken    string        `mapstructure:"auth_token" json:"auth_token"`
+	PingInterval time.Duration `mapstructure:"ping_interval" json:"ping_interval"`
+	PongTimeout  time.Duration `mapstructure:"pong_timeout" json:"pong_timeout"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout" json:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout" json:"write_timeout"`
 }

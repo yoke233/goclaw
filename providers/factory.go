@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/smallnest/dogclaw/goclaw/config"
+	"github.com/smallnest/dogclaw/goclaw/types"
 )
 
 // ProviderType 提供商类型
@@ -16,8 +17,19 @@ const (
 	ProviderTypeOpenRouter ProviderType = "openrouter"
 )
 
-// NewProvider 创建提供商
+// NewProvider 创建提供商（支持故障转移和配置轮换）
 func NewProvider(cfg *config.Config) (Provider, error) {
+	// 如果启用了故障转移且配置了多个配置，使用轮换提供商
+	if cfg.Providers.Failover.Enabled && len(cfg.Providers.Profiles) > 0 {
+		return NewRotationProviderFromConfig(cfg)
+	}
+
+	// 否则使用单一提供商
+	return NewSimpleProvider(cfg)
+}
+
+// NewSimpleProvider 创建单一提供商
+func NewSimpleProvider(cfg *config.Config) (Provider, error) {
 	// 确定使用哪个提供商
 	providerType, model, err := determineProvider(cfg)
 	if err != nil {
@@ -31,6 +43,67 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 		return NewAnthropicProvider(cfg.Providers.Anthropic.APIKey, cfg.Providers.Anthropic.BaseURL, model)
 	case ProviderTypeOpenRouter:
 		return NewOpenRouterProvider(cfg.Providers.OpenRouter.APIKey, cfg.Providers.OpenRouter.BaseURL, model)
+	default:
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
+	}
+}
+
+// NewRotationProviderFromConfig 从配置创建轮换提供商
+func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
+	// 创建错误分类器
+	errorClassifier := types.NewSimpleErrorClassifier()
+
+	// 确定轮换策略
+	strategy := RotationStrategy(cfg.Providers.Failover.Strategy)
+	if strategy == "" {
+		strategy = RotationStrategyRoundRobin
+	}
+
+	// 创建轮换提供商
+	rotation := NewRotationProvider(
+		strategy,
+		cfg.Providers.Failover.DefaultCooldown,
+		errorClassifier,
+	)
+
+	// 添加所有配置
+	for _, profileCfg := range cfg.Providers.Profiles {
+		prov, err := createProviderByType(profileCfg.Provider, profileCfg.APIKey, profileCfg.BaseURL, cfg.Agents.Defaults.Model)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create provider for profile %s: %w", profileCfg.Name, err)
+		}
+
+		priority := profileCfg.Priority
+		if priority == 0 {
+			priority = 1
+		}
+
+		rotation.AddProfile(profileCfg.Name, prov, profileCfg.APIKey, priority)
+	}
+
+	// 如果只有一个配置，返回第一个提供商
+	if len(cfg.Providers.Profiles) == 1 {
+		for _, p := range cfg.Providers.Profiles {
+			prov, err := createProviderByType(p.Provider, p.APIKey, p.BaseURL, cfg.Agents.Defaults.Model)
+			if err != nil {
+				return nil, err
+			}
+			return prov, nil
+		}
+	}
+
+	return rotation, nil
+}
+
+// createProviderByType 根据类型创建提供商
+func createProviderByType(providerType, apiKey, baseURL, model string) (Provider, error) {
+	switch ProviderType(providerType) {
+	case ProviderTypeOpenAI:
+		return NewOpenAIProvider(apiKey, baseURL, model)
+	case ProviderTypeAnthropic:
+		return NewAnthropicProvider(apiKey, baseURL, model)
+	case ProviderTypeOpenRouter:
+		return NewOpenRouterProvider(apiKey, baseURL, model)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}

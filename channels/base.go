@@ -2,6 +2,8 @@ package channels
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/smallnest/dogclaw/goclaw/bus"
 )
@@ -19,6 +21,9 @@ type BaseChannel interface {
 
 	// Send 发送消息
 	Send(msg *bus.OutboundMessage) error
+
+	// SendStream 发送流式消息
+	SendStream(chatID string, stream <-chan *bus.StreamMessage) error
 
 	// IsAllowed 检查发送者是否允许
 	IsAllowed(senderID string) bool
@@ -111,4 +116,27 @@ func (c *BaseChannelImpl) IsRunning() bool {
 // WaitForStop 等待停止信号
 func (c *BaseChannelImpl) WaitForStop() <-chan struct{} {
 	return c.stopChan
+}
+
+// SendStream 发送流式消息 (默认实现，收集所有chunk后一次性发送)
+func (c *BaseChannelImpl) SendStream(chatID string, stream <-chan *bus.StreamMessage) error {
+	var content strings.Builder
+
+	for msg := range stream {
+		if msg.Error != "" {
+			return fmt.Errorf("stream error: %s", msg.Error)
+		}
+
+		if !msg.IsThinking && !msg.IsFinal {
+			content.WriteString(msg.Content)
+		}
+
+		if msg.IsComplete {
+			// Send complete message - note: this needs actual channel implementation
+			// Default implementation just collects content
+			return nil
+		}
+	}
+
+	return nil
 }
