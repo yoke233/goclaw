@@ -18,6 +18,10 @@ func ReadLineWithHistory(prompt string, history []string) (string, error) {
 		HistoryLimit:    1000,
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		// 确保输入输出正确配置
+		UniqueEditLine:  true,
+		// 禁用自动完成，避免干扰
+		AutoComplete:    nil,
 	}
 
 	rl, err := readline.NewEx(cfg)

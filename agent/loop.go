@@ -401,8 +401,8 @@ func (l *Loop) runIteration(ctx context.Context, sess *session.Session, userRequ
 				result, err := l.executeToolWithRetry(ctx, tc.Name, tc.Params)
 				if err != nil {
 					// 工具执行错误不应该终止整个迭代
-					// 将错误信息作为工具结果返回给 LLM
-					result = fmt.Sprintf("Error: %v", err)
+					// 将增强的错误信息作为工具结果返回给 LLM
+					result = l.formatToolError(tc.Name, tc.Params, err)
 				}
 
 				logger.Debug("Tool execution result",
@@ -591,6 +591,83 @@ func (l *Loop) setLoadedSkills(sess *session.Session, skills []string) {
 		sess.Metadata = make(map[string]interface{})
 	}
 	sess.Metadata["loaded_skills"] = skills
+}
+
+// formatToolError 格式化工具错误信息，提供降级建议
+func (l *Loop) formatToolError(toolName string, params map[string]interface{}, err error) string {
+	errorMsg := err.Error()
+
+	// 根据错误类型和工具名称提供具体的降级建议
+	var suggestions []string
+
+	switch toolName {
+	case "write_file":
+		suggestions = []string{
+			"1. **输出到控制台**: 直接将内容显示给用户，让他们手动复制",
+			"2. **使用相对路径**: 尝试使用 `./filename` 而不是 `filename`",
+			"3. **使用完整路径**: 尝试使用绝对路径如 `/tmp/filename`",
+			"4. **检查权限**: 确认当前目录有写入权限",
+		}
+		if path, ok := params["path"].(string); ok {
+			suggestions = append([]string{
+				fmt.Sprintf("**目标文件**: `%s`", path),
+			}, suggestions...)
+		}
+
+	case "read_file":
+		suggestions = []string{
+			"1. **检查路径**: 确认文件路径是否正确",
+			"2. **列出目录**: 使用 `list_dir` 工具查看目录内容",
+			"3. **使用相对路径**: 尝试使用 `./filename`",
+		}
+
+	case "smart_search", "web_search":
+		suggestions = []string{
+			"1. **简化查询**: 使用更简单的关键词",
+			"2. **稍后重试**: 网络暂时不可用",
+			"3. **告知用户**: 让用户自己搜索并提供结果",
+		}
+
+	case "browser":
+		suggestions = []string{
+			"1. **检查URL**: 确认URL格式正确",
+			"2. **使用web_reader**: 尝试使用 web_reader 工具替代",
+			"3. **告知用户**: 让用户提供页面的文本内容",
+		}
+
+	default:
+		suggestions = []string{
+			"1. **检查参数**: 确认工具参数是否正确",
+			"2. **查看文档**: 确认工具的正确使用方式",
+			"3. **尝试替代方案**: 使用其他工具或方法",
+		}
+	}
+
+	// 构建结构化的错误消息
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("## 工具执行失败: `%s`\n\n", toolName))
+	buf.WriteString(fmt.Sprintf("**错误**: %s\n\n", errorMsg))
+
+	if len(suggestions) > 0 {
+		buf.WriteString("**建议的替代方案**:\n\n")
+		for _, s := range suggestions {
+			buf.WriteString(fmt.Sprintf("%s\n", s))
+		}
+	}
+
+	// 如果内容可用，建议输出到控制台
+	if toolName == "write_file" {
+		if content, ok := params["content"].(string); ok {
+			preview := content
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			buf.WriteString(fmt.Sprintf("\n**内容预览**:\n```\n%s\n```\n", preview))
+			buf.WriteString("\n**操作**: 建议直接输出内容到控制台，让用户手动复制保存。\n")
+		}
+	}
+
+	return buf.String()
 }
 
 // generateSummary 生成子代理结果的总结

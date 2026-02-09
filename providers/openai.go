@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/smallnest/dogclaw/goclaw/internal/logger"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/openai"
+	"go.uber.org/zap"
 )
 
 // OpenAIProvider OpenAI 提供商
@@ -144,17 +146,31 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(completion.Choices) > 0 {
 		// 记录是否有工具调用
 		if len(completion.Choices[0].ToolCalls) > 0 {
-			fmt.Printf("DEBUG: Found %d tool calls from LLM\n", len(completion.Choices[0].ToolCalls))
+			logger.Debug("Found tool calls from LLM",
+				zap.Int("count", len(completion.Choices[0].ToolCalls)))
 			for _, tc := range completion.Choices[0].ToolCalls {
-				fmt.Printf("DEBUG: Tool call - ID: %s, Name: %s, Args: %s\n", tc.ID, tc.FunctionCall.Name, tc.FunctionCall.Arguments)
+				logger.Debug("Tool call",
+					zap.String("id", tc.ID),
+					zap.String("name", tc.FunctionCall.Name),
+					zap.String("args", tc.FunctionCall.Arguments))
 			}
 		}
 		for _, tc := range completion.Choices[0].ToolCalls {
 			var params map[string]interface{}
 			if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &params); err != nil {
 				// 如果参数解析失败，记录错误但继续
-				fmt.Printf("failed to unmarshal tool arguments: %v\n", err)
-				continue
+				logger.Error("Failed to unmarshal tool arguments",
+					zap.String("tool", tc.FunctionCall.Name),
+					zap.String("id", tc.ID),
+					zap.Error(err),
+					zap.String("raw_args", tc.FunctionCall.Arguments),
+					zap.Int("args_length", len(tc.FunctionCall.Arguments)))
+
+				// 创建一个包含错误信息的参数对象
+				params = map[string]interface{}{
+					"__error__": fmt.Sprintf("Failed to parse arguments: %v", err),
+					"__raw_arguments__": tc.FunctionCall.Arguments,
+				}
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:     tc.ID,

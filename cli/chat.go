@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"github.com/smallnest/dogclaw/goclaw/agent/tools"
 	"github.com/smallnest/dogclaw/goclaw/bus"
 	"github.com/smallnest/dogclaw/goclaw/cli/commands"
-	"github.com/smallnest/dogclaw/goclaw/cli/input"
 	"github.com/smallnest/dogclaw/goclaw/config"
 	"github.com/smallnest/dogclaw/goclaw/internal/logger"
 	"github.com/smallnest/dogclaw/goclaw/providers"
@@ -217,18 +217,27 @@ func runChat(cmd *cobra.Command, args []string) {
 		fmt.Println("=== End of System Prompt ===")
 	}
 
-	// 主循环 - 使用 bubbletea 输入（支持中文宽字符和历史记录）
+	// 主循环 - 使用简单的输入方式避免 readline 问题
 	var history []string       // 历史输入记录
 	var inputHistory []string  // 用于上下键浏览的历史
 
 	for {
-		// 读取输入（传入历史记录支持上下键浏览）
-		input, err := input.ReadLineWithHistory("➤ ", inputHistory)
-		if err != nil {
-			// 用户按 Ctrl+C 或 Ctrl+D
+		// 显示提示符
+		fmt.Print("➤ ")
+
+		// 读取输入 - 使用简单的 bufio.Scanner
+		input := ""
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			input = scanner.Text()
+		}
+		if err := scanner.Err(); err != nil {
+			logger.Warn("Input read error", zap.Error(err))
 			fmt.Println("\nGoodbye!")
 			break
 		}
+
+		logger.Debug("Received user input", zap.String("input", input))
 
 		input = strings.TrimSpace(input)
 
@@ -254,8 +263,7 @@ func runChat(cmd *cobra.Command, args []string) {
 			continue
 		}
 
-		// 添加到历史记录（用于上下键浏览）
-		// 避免重复添加相同的最后一条记录
+		// 添加到历史记录
 		if len(inputHistory) == 0 || inputHistory[len(inputHistory)-1] != input {
 			inputHistory = append(inputHistory, input)
 		}
@@ -271,15 +279,46 @@ func runChat(cmd *cobra.Command, args []string) {
 			Content: input,
 		})
 
-		// 运行 Agent
-		response, err := runAgentIteration(ctx, sess, provider, contextBuilder, toolRegistry, skillsLoader, cfg.Agents.Defaults.MaxIterations)
+		// 运行 Agent（带超时保护）
+		// 创建一个带超时的子上下文，防止 Agent 无限循环
+		// 注意：超时时间设置为 30 分钟，给 PPT 生成足够的时间
+		iterationCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+
+		logger.Debug("Starting agent iteration", zap.Int("timeout_seconds", 30*60))
+
+		response, err := runAgentIteration(iterationCtx, sess, provider, contextBuilder, toolRegistry, skillsLoader, cfg.Agents.Defaults.MaxIterations)
 		if err != nil {
-			fmt.Printf("Error: %v\n\n", err)
+			logger.Error("Agent iteration failed", zap.Error(err))
+			if iterationCtx.Err() == context.DeadlineExceeded {
+				fmt.Fprintf(os.Stderr, "\n[Agent 超时：执行时间超过 30 分钟，已自动终止]\n\n")
+				// 从会话中移除最后一条用户消息，避免重复执行
+				if len(sess.Messages) >= 2 {
+					sess.Messages = sess.Messages[:len(sess.Messages)-2]
+				}
+			} else {
+				fmt.Printf("Error: %v\n\n", err)
+			}
 			continue
 		}
 
+		logger.Debug("Agent iteration completed successfully", zap.Int("response_length", len(response)))
+
 		// 显示响应
-		fmt.Printf("\n%s\n\n", response)
+		// 使用 fmt.Fprintln 确保输出被刷新
+		fmt.Fprintln(os.Stdout, "\n"+response)
+
+		// 确保所有输出都被刷新
+		// 这对于显示提示符很重要
+		fmt.Fprint(os.Stdout, "\n")
+
+		// 强制刷新 stdout，确保所有输出都被写入终端
+		if err := os.Stdout.Sync(); err != nil {
+			// Sync 不是所有系统都支持，忽略错误
+		}
+
+		// 调试：记录响应结束
+		logger.Debug("Response displayed, waiting for next input")
 
 		// 添加助手响应
 		sess.AddMessage(session.Message{
@@ -312,6 +351,10 @@ func runAgentIteration(
 
 	for iteration < maxIterations {
 		iteration++
+
+		logger.Debug("Agent iteration",
+			zap.Int("iteration", iteration),
+			zap.Int("max_iterations", maxIterations))
 
 		// 获取可用技能
 		var skills []*agent.Skill
@@ -361,6 +404,10 @@ func runAgentIteration(
 
 		// 检查是否有工具调用
 		if len(response.ToolCalls) > 0 {
+			logger.Debug("LLM returned tool calls",
+				zap.Int("count", len(response.ToolCalls)),
+				zap.Int("iteration", iteration))
+
 			// 重要：必须先把带有工具调用的助手消息存入历史记录
 			var assistantToolCalls []session.ToolCall
 			for _, tc := range response.ToolCalls {
@@ -379,10 +426,17 @@ func runAgentIteration(
 			// 执行工具调用
 			hasNewSkill := false
 			for _, tc := range response.ToolCalls {
+				logger.Debug("Executing tool",
+					zap.String("tool", tc.Name),
+					zap.Int("iteration", iteration))
+
 				// 使用 fmt.Fprint 而不是 fmt.Printf，避免换行干扰
 				fmt.Fprint(os.Stderr, ".") // 简单的点号表示正在执行工具
 				result, err := toolRegistry.Execute(ctx, tc.Name, tc.Params)
 				if err != nil {
+					logger.Error("Tool execution failed",
+						zap.String("tool", tc.Name),
+						zap.Error(err))
 					result = fmt.Sprintf("Error: %v", err)
 				}
 				fmt.Fprint(os.Stderr, "") // 刷新输出
@@ -410,17 +464,31 @@ func runAgentIteration(
 
 			// 如果加载了新技能，继续迭代让 LLM 获取完整内容
 			if hasNewSkill {
+				logger.Debug("New skill loaded, continuing iteration")
 				continue
 			}
 
 			// 继续下一次迭代
+			logger.Debug("Continuing to next iteration")
 			continue
 		}
 
 		// 没有工具调用，返回响应
+		logger.Debug("No tool calls, returning response",
+			zap.Int("iteration", iteration),
+			zap.Int("response_length", len(response.Content)))
 		lastResponse = response.Content
 		break
 	}
+
+	if iteration >= maxIterations {
+		logger.Warn("Agent reached max iterations",
+			zap.Int("max", maxIterations))
+	}
+
+	logger.Debug("Agent iteration completed",
+		zap.Int("total_iterations", iteration),
+		zap.Int("response_length", len(lastResponse)))
 
 	return lastResponse, nil
 }

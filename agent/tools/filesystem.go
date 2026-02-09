@@ -111,9 +111,10 @@ func (t *FileSystemTool) isAllowed(path string) bool {
 		return false
 	}
 
-	// 检查拒绝列表
+	// 检查拒绝列表（转换为绝对路径）
 	for _, denied := range t.deniedPaths {
-		if strings.HasPrefix(absPath, denied) {
+		absDenied, err := filepath.Abs(denied)
+		if err == nil && strings.HasPrefix(absPath, absDenied) {
 			return false
 		}
 	}
@@ -123,9 +124,10 @@ func (t *FileSystemTool) isAllowed(path string) bool {
 		return true
 	}
 
-	// 检查允许列表
+	// 检查允许列表（转换为绝对路径）
 	for _, allowed := range t.allowedPaths {
-		if strings.HasPrefix(absPath, allowed) {
+		absAllowed, err := filepath.Abs(allowed)
+		if err == nil && strings.HasPrefix(absPath, absAllowed) {
 			return true
 		}
 	}
