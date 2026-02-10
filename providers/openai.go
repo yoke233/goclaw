@@ -13,12 +13,13 @@ import (
 
 // OpenAIProvider OpenAI 提供商
 type OpenAIProvider struct {
-	llm   *openai.LLM
-	model string
+	llm       *openai.LLM
+	model     string
+	maxTokens int
 }
 
 // NewOpenAIProvider 创建 OpenAI 提供商
-func NewOpenAIProvider(apiKey, baseURL, model string) (*OpenAIProvider, error) {
+func NewOpenAIProvider(apiKey, baseURL, model string, maxTokens int) (*OpenAIProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -42,8 +43,9 @@ func NewOpenAIProvider(apiKey, baseURL, model string) (*OpenAIProvider, error) {
 	}
 
 	return &OpenAIProvider{
-		llm:   llm,
-		model: model,
+		llm:       llm,
+		model:     model,
+		maxTokens: maxTokens,
 	}, nil
 }
 
@@ -52,7 +54,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	opts := &ChatOptions{
 		Model:       p.model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   p.maxTokens,
 		Stream:      false,
 	}
 
@@ -168,7 +170,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 				// 创建一个包含错误信息的参数对象
 				params = map[string]interface{}{
-					"__error__": fmt.Sprintf("Failed to parse arguments: %v", err),
+					"__error__":         fmt.Sprintf("Failed to parse arguments: %v", err),
 					"__raw_arguments__": tc.FunctionCall.Arguments,
 				}
 			}
@@ -200,6 +202,6 @@ func (p *OpenAIProvider) Close() error {
 }
 
 // NewOpenAIProviderFromLangChain 从 LangChain 创建提供商
-func NewOpenAIProviderFromLangChain(apiKey, baseURL, model string) (Provider, error) {
-	return NewOpenAIProvider(apiKey, baseURL, model)
+func NewOpenAIProviderFromLangChain(apiKey, baseURL, model string, maxTokens int) (Provider, error) {
+	return NewOpenAIProvider(apiKey, baseURL, model, maxTokens)
 }

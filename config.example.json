@@ -4,7 +4,7 @@
       "model": "deepseek-chat",
       "max_iterations": 15,
       "temperature": 0.7,
-      "max_tokens": 97280
+      "max_tokens": 4096
     }
   },
   "channels": {

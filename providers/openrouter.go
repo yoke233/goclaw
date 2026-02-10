@@ -11,12 +11,13 @@ import (
 
 // OpenRouterProvider OpenRouter 提供商
 type OpenRouterProvider struct {
-	llm   llms.Model
-	model string
+	llm       llms.Model
+	model     string
+	maxTokens int
 }
 
 // NewOpenRouterProvider 创建 OpenRouter 提供商
-func NewOpenRouterProvider(apiKey, baseURL, model string) (*OpenRouterProvider, error) {
+func NewOpenRouterProvider(apiKey, baseURL, model string, maxTokens int) (*OpenRouterProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -39,8 +40,9 @@ func NewOpenRouterProvider(apiKey, baseURL, model string) (*OpenRouterProvider, 
 	}
 
 	return &OpenRouterProvider{
-		llm:   llm,
-		model: model,
+		llm:       llm,
+		model:     model,
+		maxTokens: maxTokens,
 	}, nil
 }
 
@@ -49,7 +51,7 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, messages []Message, tools
 	opts := &ChatOptions{
 		Model:       p.model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   p.maxTokens,
 		Stream:      false,
 	}
 

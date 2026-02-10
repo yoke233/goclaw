@@ -11,12 +11,13 @@ import (
 
 // AnthropicProvider Anthropic 提供商
 type AnthropicProvider struct {
-	llm   llms.Model
-	model string
+	llm       llms.Model
+	model     string
+	maxTokens int
 }
 
 // NewAnthropicProvider 创建 Anthropic 提供商
-func NewAnthropicProvider(apiKey, baseURL, model string) (*AnthropicProvider, error) {
+func NewAnthropicProvider(apiKey, baseURL, model string, maxTokens int) (*AnthropicProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -31,7 +32,7 @@ func NewAnthropicProvider(apiKey, baseURL, model string) (*AnthropicProvider, er
 	}
 
 	if baseURL != "" {
-		// Note: langchaingo's anthropic package might not support WithBaseURL yet, 
+		// Note: langchaingo's anthropic package might not support WithBaseURL yet,
 		// but we should check if it's available or use a custom client if needed.
 		// For now, we'll try to use it if it exists.
 		// Actually, let's check langchaingo's anthropic option.
@@ -43,8 +44,9 @@ func NewAnthropicProvider(apiKey, baseURL, model string) (*AnthropicProvider, er
 	}
 
 	return &AnthropicProvider{
-		llm:   llm,
-		model: model,
+		llm:       llm,
+		model:     model,
+		maxTokens: maxTokens,
 	}, nil
 }
 
@@ -53,7 +55,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	opts := &ChatOptions{
 		Model:       p.model,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   p.maxTokens,
 		Stream:      false,
 	}
 

@@ -38,11 +38,11 @@ func NewSimpleProvider(cfg *config.Config) (Provider, error) {
 
 	switch providerType {
 	case ProviderTypeOpenAI:
-		return NewOpenAIProvider(cfg.Providers.OpenAI.APIKey, cfg.Providers.OpenAI.BaseURL, model)
+		return NewOpenAIProvider(cfg.Providers.OpenAI.APIKey, cfg.Providers.OpenAI.BaseURL, model, cfg.Agents.Defaults.MaxTokens)
 	case ProviderTypeAnthropic:
-		return NewAnthropicProvider(cfg.Providers.Anthropic.APIKey, cfg.Providers.Anthropic.BaseURL, model)
+		return NewAnthropicProvider(cfg.Providers.Anthropic.APIKey, cfg.Providers.Anthropic.BaseURL, model, cfg.Agents.Defaults.MaxTokens)
 	case ProviderTypeOpenRouter:
-		return NewOpenRouterProvider(cfg.Providers.OpenRouter.APIKey, cfg.Providers.OpenRouter.BaseURL, model)
+		return NewOpenRouterProvider(cfg.Providers.OpenRouter.APIKey, cfg.Providers.OpenRouter.BaseURL, model, cfg.Agents.Defaults.MaxTokens)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
@@ -68,7 +68,7 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 
 	// 添加所有配置
 	for _, profileCfg := range cfg.Providers.Profiles {
-		prov, err := createProviderByType(profileCfg.Provider, profileCfg.APIKey, profileCfg.BaseURL, cfg.Agents.Defaults.Model)
+		prov, err := createProviderByType(profileCfg.Provider, profileCfg.APIKey, profileCfg.BaseURL, cfg.Agents.Defaults.Model, cfg.Agents.Defaults.MaxTokens)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create provider for profile %s: %w", profileCfg.Name, err)
 		}
@@ -84,7 +84,7 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 	// 如果只有一个配置，返回第一个提供商
 	if len(cfg.Providers.Profiles) == 1 {
 		for _, p := range cfg.Providers.Profiles {
-			prov, err := createProviderByType(p.Provider, p.APIKey, p.BaseURL, cfg.Agents.Defaults.Model)
+			prov, err := createProviderByType(p.Provider, p.APIKey, p.BaseURL, cfg.Agents.Defaults.Model, cfg.Agents.Defaults.MaxTokens)
 			if err != nil {
 				return nil, err
 			}
@@ -96,14 +96,14 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 }
 
 // createProviderByType 根据类型创建提供商
-func createProviderByType(providerType, apiKey, baseURL, model string) (Provider, error) {
+func createProviderByType(providerType, apiKey, baseURL, model string, maxTokens int) (Provider, error) {
 	switch ProviderType(providerType) {
 	case ProviderTypeOpenAI:
-		return NewOpenAIProvider(apiKey, baseURL, model)
+		return NewOpenAIProvider(apiKey, baseURL, model, maxTokens)
 	case ProviderTypeAnthropic:
-		return NewAnthropicProvider(apiKey, baseURL, model)
+		return NewAnthropicProvider(apiKey, baseURL, model, maxTokens)
 	case ProviderTypeOpenRouter:
-		return NewOpenRouterProvider(apiKey, baseURL, model)
+		return NewOpenRouterProvider(apiKey, baseURL, model, maxTokens)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
