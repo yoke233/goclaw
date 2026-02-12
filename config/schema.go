@@ -323,9 +323,10 @@ type ApprovalsConfig struct {
 
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
-	Backend string              `mapstructure:"backend" json:"backend"` // "builtin" | "qmd"
-	Builtin BuiltinMemoryConfig `mapstructure:"builtin" json:"builtin"`
-	QMD     QMDConfig           `mapstructure:"qmd" json:"qmd"`
+	Backend   string              `mapstructure:"backend" json:"backend"` // "builtin" | "qmd" | "memsearch"
+	Builtin   BuiltinMemoryConfig `mapstructure:"builtin" json:"builtin"`
+	QMD       QMDConfig           `mapstructure:"qmd" json:"qmd"`
+	Memsearch MemsearchConfig     `mapstructure:"memsearch" json:"memsearch"`
 }
 
 // BuiltinMemoryConfig 内置 SQLite 记忆配置
@@ -374,4 +375,52 @@ type QMDLimits struct {
 	MaxResults      int `mapstructure:"max_results" json:"max_results"`             // 默认 6
 	MaxSnippetChars int `mapstructure:"max_snippet_chars" json:"max_snippet_chars"` // 默认 700
 	TimeoutMs       int `mapstructure:"timeout_ms" json:"timeout_ms"`               // 默认 4000
+}
+
+// MemsearchConfig memsearch 记忆配置
+type MemsearchConfig struct {
+	Command     string                  `mapstructure:"command" json:"command"`
+	Provider    string                  `mapstructure:"provider" json:"provider"`
+	Model       string                  `mapstructure:"model" json:"model"`
+	MilvusURI   string                  `mapstructure:"milvus_uri" json:"milvus_uri"`
+	MilvusToken string                  `mapstructure:"milvus_token" json:"milvus_token"`
+	Collection  string                  `mapstructure:"collection" json:"collection"`
+	Chunking    MemsearchChunkingConfig `mapstructure:"chunking" json:"chunking"`
+	Watch       MemsearchWatchConfig    `mapstructure:"watch" json:"watch"`
+	Compact     MemsearchCompactConfig  `mapstructure:"compact" json:"compact"`
+	Sessions    MemsearchSessionsConfig `mapstructure:"sessions" json:"sessions"`
+	Context     MemsearchContextConfig  `mapstructure:"context" json:"context"`
+}
+
+// MemsearchChunkingConfig 分块配置
+type MemsearchChunkingConfig struct {
+	MaxChunkSize int `mapstructure:"max_chunk_size" json:"max_chunk_size"`
+	OverlapLines int `mapstructure:"overlap_lines" json:"overlap_lines"`
+}
+
+// MemsearchWatchConfig 监听配置
+type MemsearchWatchConfig struct {
+	DebounceMs int `mapstructure:"debounce_ms" json:"debounce_ms"`
+}
+
+// MemsearchCompactConfig 压缩配置
+type MemsearchCompactConfig struct {
+	LLMProvider string `mapstructure:"llm_provider" json:"llm_provider"`
+	LLMModel    string `mapstructure:"llm_model" json:"llm_model"`
+	PromptFile  string `mapstructure:"prompt_file" json:"prompt_file"`
+}
+
+// MemsearchSessionsConfig 会话导出与保留配置
+type MemsearchSessionsConfig struct {
+	Enabled       bool   `mapstructure:"enabled" json:"enabled"`
+	ExportDir     string `mapstructure:"export_dir" json:"export_dir"`
+	RetentionDays int    `mapstructure:"retention_days" json:"retention_days"`
+	Redact        bool   `mapstructure:"redact" json:"redact"`
+}
+
+// MemsearchContextConfig 系统提示词记忆注入配置
+type MemsearchContextConfig struct {
+	Enabled bool   `mapstructure:"enabled" json:"enabled"`
+	Query   string `mapstructure:"query" json:"query"`
+	Limit   int    `mapstructure:"limit" json:"limit"`
 }

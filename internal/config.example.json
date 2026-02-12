@@ -107,28 +107,17 @@
     }
   },
   "memory": {
-    "backend": "builtin",
+    "backend": "memsearch",
     "builtin": {
-      "enabled": true,
+      "enabled": false,
       "database_path": "",
-      "auto_index": true
+      "auto_index": false
     },
     "qmd": {
       "command": "qmd",
       "enabled": false,
       "include_default": true,
-      "paths": [
-        {
-          "name": "notes",
-          "path": "~/notes",
-          "pattern": "**/*.md"
-        },
-        {
-          "name": "docs",
-          "path": "~/Documents",
-          "pattern": "**/*.md"
-        }
-      ],
+      "paths": [],
       "sessions": {
         "enabled": false,
         "export_dir": "~/.goclaw/sessions/export",
@@ -145,6 +134,37 @@
         "max_results": 6,
         "max_snippet_chars": 700,
         "timeout_ms": 4000
+      }
+    },
+    "memsearch": {
+      "command": "memsearch",
+      "provider": "openai",
+      "model": "",
+      "milvus_uri": "~/.memsearch/milvus.db",
+      "milvus_token": "",
+      "collection": "memsearch_chunks",
+      "chunking": {
+        "max_chunk_size": 1500,
+        "overlap_lines": 2
+      },
+      "watch": {
+        "debounce_ms": 1500
+      },
+      "compact": {
+        "llm_provider": "openai",
+        "llm_model": "",
+        "prompt_file": ""
+      },
+      "sessions": {
+        "enabled": true,
+        "export_dir": "~/.goclaw/sessions/export",
+        "retention_days": 60,
+        "redact": false
+      },
+      "context": {
+        "enabled": false,
+        "query": "project context and user preferences",
+        "limit": 6
       }
     }
   }

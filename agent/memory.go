@@ -1,22 +1,33 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/smallnest/goclaw/memory"
 )
 
 // MemoryStore 记忆存储
 type MemoryStore struct {
-	workspace string
+	workspace      string
+	searchMgr      memory.MemorySearchManager
+	contextQuery   string
+	contextLimit   int
+	contextEnabled bool
 }
 
 // NewMemoryStore 创建记忆存储
-func NewMemoryStore(workspace string) *MemoryStore {
+func NewMemoryStore(workspace string, searchMgr memory.MemorySearchManager, contextQuery string, contextLimit int, contextEnabled bool) *MemoryStore {
 	return &MemoryStore{
-		workspace: workspace,
+		workspace:      workspace,
+		searchMgr:      searchMgr,
+		contextQuery:   contextQuery,
+		contextLimit:   contextLimit,
+		contextEnabled: contextEnabled,
 	}
 }
 
@@ -119,6 +130,22 @@ func (m *MemoryStore) AppendLongTerm(content string) error {
 func (m *MemoryStore) GetMemoryContext() (string, error) {
 	var parts []string
 
+	if m.contextEnabled && m.searchMgr != nil && strings.TrimSpace(m.contextQuery) != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		opts := memory.DefaultSearchOptions()
+		opts.Limit = m.contextLimit
+		opts.MinScore = 0.0
+		results, err := m.searchMgr.Search(ctx, m.contextQuery, opts)
+		if err != nil {
+			return "", err
+		}
+		if len(results) > 0 {
+			return formatMemsearchContext(results), nil
+		}
+	}
+
 	// 读取长期记忆
 	longTerm, err := m.ReadLongTerm()
 	if err != nil {
@@ -142,6 +169,30 @@ func (m *MemoryStore) GetMemoryContext() (string, error) {
 	}
 
 	return strings.Join(parts, "\n\n---\n\n"), nil
+}
+
+func formatMemsearchContext(results []*memory.SearchResult) string {
+	var sb strings.Builder
+	sb.WriteString("## Memory Context\n\n")
+
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("[%d] ", i+1))
+		if r.Metadata.FilePath != "" {
+			sb.WriteString(r.Metadata.FilePath)
+			if r.Metadata.LineNumber > 0 {
+				sb.WriteString(fmt.Sprintf(":%d", r.Metadata.LineNumber))
+			}
+			sb.WriteString("\n")
+		}
+		text := strings.TrimSpace(r.Text)
+		if len(text) > 300 {
+			text = text[:300] + "..."
+		}
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+
+	return sb.String()
 }
 
 // ReadBootstrapFile 读取 bootstrap 文件

@@ -1,16 +1,22 @@
 package commands
 
 import (
+	"bufio"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/memory/qmd"
+	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +24,7 @@ import (
 var MemoryCmd = &cobra.Command{
 	Use:   "memory",
 	Short: "Manage goclaw memory",
-	Long:  `View status, index, and search memory stores. Supports builtin and QMD backends.`,
+	Long:  `View status, index, and search memory stores. Uses memsearch backend.`,
 }
 
 // memoryStatusCmd 显示记忆状态
@@ -54,11 +60,69 @@ var memoryBackendCmd = &cobra.Command{
 	Run:   runMemoryBackend,
 }
 
+// memoryWatchCmd 监听并自动索引
+var memoryWatchCmd = &cobra.Command{
+	Use:   "watch <paths...>",
+	Short: "Watch paths and auto-index markdown changes",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runMemoryWatch,
+}
+
+// memoryCompactCmd 压缩索引内容
+var memoryCompactCmd = &cobra.Command{
+	Use:   "compact",
+	Short: "Compact indexed memory into a summary",
+	Run:   runMemoryCompact,
+}
+
+// memoryExpandCmd 展开 chunk
+var memoryExpandCmd = &cobra.Command{
+	Use:   "expand <chunk_hash>",
+	Short: "Expand a chunk to show full context",
+	Args:  cobra.ExactArgs(1),
+	Run:   runMemoryExpand,
+}
+
+// memoryTranscriptCmd 查看 JSONL 会话
+var memoryTranscriptCmd = &cobra.Command{
+	Use:   "transcript <jsonl_path>",
+	Short: "View conversation turns from a JSONL transcript",
+	Args:  cobra.ExactArgs(1),
+	Run:   runMemoryTranscript,
+}
+
+// memoryResetCmd 删除索引
+var memoryResetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Drop all indexed data from the collection",
+	Run:   runMemoryReset,
+}
+
 var (
 	memorySearchLimit    int
 	memorySearchMinScore float64
 	memorySearchJSON     bool
-	memoryForceBuiltin   bool
+
+	memoryIndexForce bool
+
+	memoryWatchDebounce int
+
+	memoryCompactSource      string
+	memoryCompactOutputDir   string
+	memoryCompactLLMProvider string
+	memoryCompactLLMModel    string
+	memoryCompactPrompt      string
+	memoryCompactPromptFile  string
+
+	memoryExpandLines   int
+	memoryExpandJSON    bool
+	memoryExpandSection bool
+
+	memoryTranscriptTurn    string
+	memoryTranscriptContext int
+	memoryTranscriptJSON    bool
+
+	memoryResetYes bool
 )
 
 func init() {
@@ -66,12 +130,36 @@ func init() {
 	MemoryCmd.AddCommand(memoryIndexCmd)
 	MemoryCmd.AddCommand(memorySearchCmd)
 	MemoryCmd.AddCommand(memoryBackendCmd)
+	MemoryCmd.AddCommand(memoryWatchCmd)
+	MemoryCmd.AddCommand(memoryCompactCmd)
+	MemoryCmd.AddCommand(memoryExpandCmd)
+	MemoryCmd.AddCommand(memoryTranscriptCmd)
+	MemoryCmd.AddCommand(memoryResetCmd)
 
 	memorySearchCmd.Flags().IntVarP(&memorySearchLimit, "limit", "n", 10, "Maximum number of results")
-	memorySearchCmd.Flags().Float64Var(&memorySearchMinScore, "min-score", 0.7, "Minimum similarity score (0-1)")
+	memorySearchCmd.Flags().Float64Var(&memorySearchMinScore, "min-score", 0.0, "Minimum similarity score (0-1)")
 	memorySearchCmd.Flags().BoolVar(&memorySearchJSON, "json", false, "Output in JSON format")
 
-	memoryIndexCmd.Flags().BoolVar(&memoryForceBuiltin, "builtin", false, "Force using builtin backend")
+	memoryIndexCmd.Flags().BoolVar(&memoryIndexForce, "force", false, "Force re-index of all chunks")
+
+	memoryWatchCmd.Flags().IntVar(&memoryWatchDebounce, "debounce-ms", 0, "Debounce delay in milliseconds")
+
+	memoryCompactCmd.Flags().StringVar(&memoryCompactSource, "source", "", "Only compact chunks from this specific source file")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactOutputDir, "output-dir", "", "Directory to write the compact summary into")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactLLMProvider, "llm-provider", "", "LLM provider for summarization")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactLLMModel, "llm-model", "", "Override LLM model")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactPrompt, "prompt", "", "Custom prompt template string")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactPromptFile, "prompt-file", "", "Custom prompt template file")
+
+	memoryExpandCmd.Flags().IntVarP(&memoryExpandLines, "lines", "n", 0, "Show N lines around the chunk instead of full section")
+	memoryExpandCmd.Flags().BoolVar(&memoryExpandJSON, "json", false, "Output in JSON format")
+	memoryExpandCmd.Flags().BoolVar(&memoryExpandSection, "section", true, "Show full section (default true)")
+
+	memoryTranscriptCmd.Flags().StringVarP(&memoryTranscriptTurn, "turn", "t", "", "Target turn ID prefix")
+	memoryTranscriptCmd.Flags().IntVarP(&memoryTranscriptContext, "context", "c", 3, "Number of turns before and after target")
+	memoryTranscriptCmd.Flags().BoolVar(&memoryTranscriptJSON, "json", false, "Output in JSON format")
+
+	memoryResetCmd.Flags().BoolVarP(&memoryResetYes, "yes", "y", false, "Skip confirmation prompt")
 }
 
 // getWorkspace 获取工作区路径
@@ -103,20 +191,7 @@ func getSearchManager() (memory.MemorySearchManager, error) {
 
 	cfg, err := config.Load("")
 	if err != nil {
-		// 使用默认配置
-		cfg = &config.Config{
-			Memory: config.MemoryConfig{
-				Backend: "builtin",
-				Builtin: config.BuiltinMemoryConfig{
-					Enabled: true,
-				},
-			},
-		}
-	}
-
-	// 如果强制使用 builtin
-	if memoryForceBuiltin {
-		cfg.Memory.Backend = "builtin"
+		cfg = &config.Config{}
 	}
 
 	return memory.GetMemorySearchManager(cfg.Memory, workspace)
@@ -133,79 +208,21 @@ func runMemoryStatus(cmd *cobra.Command, args []string) {
 
 	status := mgr.GetStatus()
 
-	// Display status
 	fmt.Println("Memory Status")
 	fmt.Println("=============")
 
-	// Backend
 	if backend, ok := status["backend"].(string); ok {
-		fmt.Printf("\nBackend: %s\n", backend)
-	}
-
-	// QMD specific
-	if available, ok := status["available"].(bool); ok {
-		if available {
-			fmt.Println("  Status: Available")
-		} else {
-			fmt.Println("  Status: Unavailable")
-		}
-	}
-
-	if collections, ok := status["collections"].([]string); ok {
-		fmt.Printf("  Collections: %v\n", collections)
-	}
-
-	if indexedFiles, ok := status["indexed_files"].(int); ok {
-		fmt.Printf("  Indexed Files: %d\n", indexedFiles)
-	}
-
-	if totalDocs, ok := status["total_documents"].(int); ok {
-		fmt.Printf("  Total Documents: %d\n", totalDocs)
-	}
-
-	if lastUpdated, ok := status["last_updated"].(time.Time); ok && !lastUpdated.IsZero() {
-		fmt.Printf("  Last Updated: %s\n", lastUpdated.Format(time.RFC3339))
-	}
-
-	if lastEmbed, ok := status["last_embed"].(time.Time); ok && !lastEmbed.IsZero() {
-		fmt.Printf("  Last Embed: %s\n", lastEmbed.Format(time.RFC3339))
-	}
-
-	// Builtin specific
-	if dbPath, ok := status["database_path"].(string); ok {
-		fmt.Printf("\nDatabase: %s\n", dbPath)
+		fmt.Printf("Backend: %s\n", backend)
 	}
 
 	if totalCount, ok := status["total_count"].(int); ok {
-		fmt.Printf("Total Entries: %d\n", totalCount)
+		fmt.Printf("Total Indexed Chunks: %d\n", totalCount)
 	}
 
-	if sourceCounts, ok := status["source_counts"].(map[memory.MemorySource]int); ok {
-		fmt.Println("\nBy Source:")
-		for source, count := range sourceCounts {
-			fmt.Printf("  %s: %d\n", source, count)
-		}
+	if raw, ok := status["raw"].(string); ok && raw != "" {
+		fmt.Printf("\nRaw Output:\n%s\n", raw)
 	}
 
-	if typeCounts, ok := status["type_counts"].(map[memory.MemoryType]int); ok {
-		fmt.Println("\nBy Type:")
-		for memType, count := range typeCounts {
-			fmt.Printf("  %s: %d\n", memType, count)
-		}
-	}
-
-	// Fallback status
-	if fallbackEnabled, ok := status["fallback_enabled"].(bool); ok && fallbackEnabled {
-		fmt.Println("\nNote: Running in fallback mode (builtin)")
-		if fallbackStatus, ok := status["fallback_status"].(map[string]interface{}); ok {
-			fmt.Println("Fallback Status:")
-			for k, v := range fallbackStatus {
-				fmt.Printf("  %s: %v\n", k, v)
-			}
-		}
-	}
-
-	// Error message
 	if errMsg, ok := status["error"].(string); ok && errMsg != "" {
 		fmt.Printf("\nError: %s\n", errMsg)
 	}
@@ -215,28 +232,38 @@ func runMemoryStatus(cmd *cobra.Command, args []string) {
 func runMemoryBackend(cmd *cobra.Command, args []string) {
 	cfg, err := config.Load("")
 	if err != nil {
-		fmt.Printf("Backend: builtin (default)\n")
+		fmt.Printf("Backend: memsearch (default)\n")
 		return
 	}
 
 	backend := cfg.Memory.Backend
 	if backend == "" {
-		backend = "builtin"
+		backend = "memsearch"
 	}
 
 	fmt.Printf("Backend: %s\n", backend)
 
-	if backend == "qmd" {
-		fmt.Printf("  QMD Command: %s\n", cfg.Memory.QMD.Command)
-		fmt.Printf("  Enabled: %v\n", cfg.Memory.QMD.Enabled)
-		if len(cfg.Memory.QMD.Paths) > 0 {
-			fmt.Println("  Paths:")
-			for _, p := range cfg.Memory.QMD.Paths {
-				fmt.Printf("    - %s: %s (%s)\n", p.Name, p.Path, p.Pattern)
-			}
+	if backend == "memsearch" {
+		ms := cfg.Memory.Memsearch
+		if strings.TrimSpace(ms.Command) == "" {
+			ms.Command = "memsearch"
 		}
-		if cfg.Memory.QMD.Sessions.Enabled {
-			fmt.Printf("  Sessions Export: %s\n", cfg.Memory.QMD.Sessions.ExportDir)
+		fmt.Printf("  Command: %s\n", ms.Command)
+		if ms.Provider != "" {
+			fmt.Printf("  Provider: %s\n", ms.Provider)
+		}
+		if ms.Model != "" {
+			fmt.Printf("  Model: %s\n", ms.Model)
+		}
+		if ms.MilvusURI != "" {
+			fmt.Printf("  Milvus URI: %s\n", ms.MilvusURI)
+		}
+		if ms.Collection != "" {
+			fmt.Printf("  Collection: %s\n", ms.Collection)
+		}
+		if ms.Sessions.Enabled {
+			fmt.Printf("  Sessions Export: %s\n", ms.Sessions.ExportDir)
+			fmt.Printf("  Sessions Retention Days: %d\n", ms.Sessions.RetentionDays)
 		}
 	}
 }
@@ -254,177 +281,56 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 		cfg = &config.Config{}
 	}
 
-	// 如果强制使用 builtin 或配置为 builtin
-	if memoryForceBuiltin || cfg.Memory.Backend == "builtin" || cfg.Memory.Backend == "" {
-		runBuiltinIndex(workspace, cfg)
-		return
-	}
+	ms := resolveMemsearchConfig(cfg)
 
-	// QMD 模式
-	if cfg.Memory.Backend == "qmd" {
-		runQMDIndex(workspace, cfg)
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "Unknown backend: %s\n", cfg.Memory.Backend)
-	os.Exit(1)
-}
-
-// runBuiltinIndex 执行 builtin 索引
-func runBuiltinIndex(workspace string, cfg *config.Config) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
+	if err := ensureMemsearchAvailable(ms); err != nil {
+		fmt.Fprintf(os.Stderr, "memsearch not available: %v\n", err)
 		os.Exit(1)
 	}
 
-	memoryDir := filepath.Join(workspace, "memory")
-	dbPath := filepath.Join(home, ".goclaw", "memory", "store.db")
-
-	// Load config for API key
-	apiKey := cfg.Providers.OpenAI.APIKey
-	if apiKey == "" {
-		apiKey = cfg.Providers.OpenRouter.APIKey
+	paths := make([]string, 0, 2)
+	if len(args) > 0 {
+		paths = append(paths, args...)
+	} else {
+		memoryDir := filepath.Join(workspace, "memory")
+		_ = os.MkdirAll(memoryDir, 0755)
+		paths = append(paths, memoryDir)
 	}
 
-	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Error: No embedding provider API key found in config.\n")
-		fmt.Fprintf(os.Stderr, "Please configure OpenAI or OpenRouter API key in ~/.goclaw/config.json\n")
-		os.Exit(1)
-	}
+	// Export sessions and apply retention
+	if ms.Sessions.Enabled {
+		sessionDir, err := qmd.FindSessionDir(workspace)
+		if err != nil {
+			sessionDir = filepath.Join(os.Getenv("HOME"), ".goclaw", "sessions")
+		}
 
-	// Create embedding provider
-	providerCfg := memory.DefaultOpenAIConfig(apiKey)
-	provider, err := memory.NewOpenAIProvider(providerCfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create embedding provider: %v\n", err)
-		os.Exit(1)
-	}
+		if _, err := memory.PruneSessionJSONL(sessionDir, ms.Sessions.RetentionDays); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to prune JSONL sessions: %v\n", err)
+		}
 
-	// Create store
-	storeConfig := memory.DefaultStoreConfig(dbPath, provider)
-	store, err := memory.NewSQLiteStore(storeConfig)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open memory store: %v\n", err)
-		os.Exit(1)
-	}
-	defer store.Close()
+		if ms.Sessions.ExportDir == "" {
+			home, _ := os.UserHomeDir()
+			ms.Sessions.ExportDir = filepath.Join(home, ".goclaw", "sessions", "export")
+		}
 
-	// Create memory manager
-	managerConfig := memory.DefaultManagerConfig(store, provider)
-	manager, err := memory.NewMemoryManager(managerConfig)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create memory manager: %v\n", err)
-		os.Exit(1)
-	}
-	defer manager.Close()
-
-	fmt.Println("Indexing memory files (builtin backend)...")
-	fmt.Printf("Workspace: %s\n", workspace)
-	fmt.Printf("Database: %s\n\n", dbPath)
-
-	ctx := context.Background()
-
-	// Index MEMORY.md
-	longTermPath := filepath.Join(memoryDir, "MEMORY.md")
-	if _, err := os.Stat(longTermPath); err == nil {
-		fmt.Printf("Indexing %s...\n", longTermPath)
-		if err := indexFile(ctx, manager, longTermPath, memory.MemorySourceLongTerm, memory.MemoryTypeFact); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to index %s: %v\n", longTermPath, err)
+		if _, err := memory.ExportSessionsToMarkdown(sessionDir, ms.Sessions.ExportDir, ms.Sessions.RetentionDays, ms.Sessions.Redact); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to export sessions: %v\n", err)
 		} else {
-			fmt.Println("  OK")
-		}
-	} else {
-		fmt.Printf("No long-term memory file found (%s)\n", longTermPath)
-	}
-
-	// Index daily notes
-	dailyFiles, err := filepath.Glob(filepath.Join(memoryDir, "????-??-??.md"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to find daily notes: %v\n", err)
-	} else {
-		fmt.Printf("\nIndexing daily notes (%d files)...\n", len(dailyFiles))
-		for _, dailyFile := range dailyFiles {
-			fmt.Printf("  %s...", filepath.Base(dailyFile))
-			if err := indexFile(ctx, manager, dailyFile, memory.MemorySourceDaily, memory.MemoryTypeContext); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
-			} else {
-				fmt.Println(" OK")
-			}
+			paths = append(paths, ms.Sessions.ExportDir)
 		}
 	}
 
-	fmt.Println("\nIndexing complete!")
-}
-
-// runQMDIndex 执行 QMD 索引
-func runQMDIndex(workspace string, cfg *config.Config) {
-	fmt.Println("Indexing memory files (QMD backend)...")
-
-	// Create QMD config
-	qmdCfg := cfg.Memory.QMD
-	qmdMgrConfig := qmd.QMDConfig{
-		Command:        qmdCfg.Command,
-		Enabled:        qmdCfg.Enabled,
-		IncludeDefault: qmdCfg.IncludeDefault,
-		Paths:          make([]qmd.QMDPathConfig, len(qmdCfg.Paths)),
-		Sessions: qmd.QMDSessionsConfig{
-			Enabled:       qmdCfg.Sessions.Enabled,
-			ExportDir:     qmdCfg.Sessions.ExportDir,
-			RetentionDays: qmdCfg.Sessions.RetentionDays,
-		},
-		Update: qmd.QMDUpdateConfig{
-			Interval:        qmdCfg.Update.Interval,
-			OnBoot:          qmdCfg.Update.OnBoot,
-			EmbedInterval:   qmdCfg.Update.EmbedInterval,
-			CommandTimeout:  qmdCfg.Update.CommandTimeout,
-			UpdateTimeout:   qmdCfg.Update.UpdateTimeout,
-		},
-		Limits: qmd.QMDLimitsConfig{
-			MaxResults:     qmdCfg.Limits.MaxResults,
-			MaxSnippetChars: qmdCfg.Limits.MaxSnippetChars,
-			TimeoutMs:      qmdCfg.Limits.TimeoutMs,
-		},
+	indexArgs := []string{"index"}
+	indexArgs = append(indexArgs, paths...)
+	if memoryIndexForce {
+		indexArgs = append(indexArgs, "--force")
 	}
+	indexArgs = append(indexArgs, buildMemsearchCommonArgs(ms)...)
 
-	for i, p := range qmdCfg.Paths {
-		qmdMgrConfig.Paths[i] = qmd.QMDPathConfig{
-			Name:    p.Name,
-			Path:    p.Path,
-			Pattern: p.Pattern,
-		}
-	}
-
-	qmdMgr := qmd.NewQMDManager(qmdMgrConfig, workspace, "")
-
-	// Initialize
-	ctx, cancel := context.WithTimeout(context.Background(), qmdCfg.Update.UpdateTimeout)
-	defer cancel()
-
-	if err := qmdMgr.Initialize(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize QMD manager: %v\n", err)
+	if err := runMemsearchStreaming(ms, indexArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "Index failed: %v\n", err)
 		os.Exit(1)
 	}
-	defer qmdMgr.Close()
-
-	// Update
-	fmt.Println("Updating QMD collections...")
-	if err := qmdMgr.Update(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to update collections: %v\n", err)
-	}
-
-	// Embed
-	fmt.Println("Generating embeddings...")
-	if err := qmdMgr.Embed(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to generate embeddings: %v\n", err)
-	}
-
-	// Show status
-	status := qmdMgr.GetStatus()
-	fmt.Println("\nIndexing complete!")
-	fmt.Printf("Collections: %v\n", status.Collections)
-	fmt.Printf("Indexed Files: %d\n", status.IndexedFiles)
-	fmt.Printf("Total Documents: %d\n", status.TotalDocuments)
 }
 
 // runMemorySearch 执行记忆搜索命令
@@ -520,137 +426,393 @@ func outputSearchResults(query string, results []*memory.SearchResult) {
 	}
 }
 
-// Helper functions for builtin indexing
-
-// indexFile 索引单个文件
-func indexFile(ctx context.Context, manager *memory.MemoryManager, filePath string, source memory.MemorySource, memType memory.MemoryType) error {
-	content, err := os.ReadFile(filePath)
+// runMemoryWatch 执行记忆监听命令
+func runMemoryWatch(cmd *cobra.Command, args []string) {
+	cfg, err := config.Load("")
 	if err != nil {
+		cfg = &config.Config{}
+	}
+	ms := resolveMemsearchConfig(cfg)
+
+	if err := ensureMemsearchAvailable(ms); err != nil {
+		fmt.Fprintf(os.Stderr, "memsearch not available: %v\n", err)
+		os.Exit(1)
+	}
+
+	watchArgs := []string{"watch"}
+	watchArgs = append(watchArgs, args...)
+
+	debounce := memoryWatchDebounce
+	if debounce <= 0 {
+		debounce = ms.Watch.DebounceMs
+	}
+	if debounce > 0 {
+		watchArgs = append(watchArgs, "--debounce-ms", fmt.Sprintf("%d", debounce))
+	}
+
+	watchArgs = append(watchArgs, buildMemsearchCommonArgs(ms)...)
+	if err := runMemsearchStreaming(ms, watchArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "Watch failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runMemoryCompact 执行记忆压缩命令
+func runMemoryCompact(cmd *cobra.Command, args []string) {
+	cfg, err := config.Load("")
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	ms := resolveMemsearchConfig(cfg)
+
+	if err := ensureMemsearchAvailable(ms); err != nil {
+		fmt.Fprintf(os.Stderr, "memsearch not available: %v\n", err)
+		os.Exit(1)
+	}
+
+	compactArgs := []string{"compact"}
+	if memoryCompactSource != "" {
+		compactArgs = append(compactArgs, "--source", memoryCompactSource)
+	}
+	if memoryCompactOutputDir != "" {
+		compactArgs = append(compactArgs, "--output-dir", memoryCompactOutputDir)
+	}
+
+	llmProvider := firstNonEmpty(memoryCompactLLMProvider, ms.Compact.LLMProvider)
+	if llmProvider != "" {
+		compactArgs = append(compactArgs, "--llm-provider", llmProvider)
+	}
+
+	llmModel := firstNonEmpty(memoryCompactLLMModel, ms.Compact.LLMModel)
+	if llmModel != "" {
+		compactArgs = append(compactArgs, "--llm-model", llmModel)
+	}
+
+	if memoryCompactPrompt != "" {
+		compactArgs = append(compactArgs, "--prompt", memoryCompactPrompt)
+	}
+	if memoryCompactPromptFile != "" {
+		compactArgs = append(compactArgs, "--prompt-file", memoryCompactPromptFile)
+	}
+
+	compactArgs = append(compactArgs, buildMemsearchCommonArgs(ms)...)
+	if err := runMemsearchStreaming(ms, compactArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "Compact failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runMemoryExpand 执行记忆展开命令
+func runMemoryExpand(cmd *cobra.Command, args []string) {
+	cfg, err := config.Load("")
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	ms := resolveMemsearchConfig(cfg)
+
+	if err := ensureMemsearchAvailable(ms); err != nil {
+		fmt.Fprintf(os.Stderr, "memsearch not available: %v\n", err)
+		os.Exit(1)
+	}
+
+	expandArgs := []string{"expand", args[0]}
+	if memoryExpandLines > 0 {
+		expandArgs = append(expandArgs, "--lines", fmt.Sprintf("%d", memoryExpandLines))
+	}
+	if !memoryExpandSection {
+		expandArgs = append(expandArgs, "--no-section")
+	}
+	if memoryExpandJSON {
+		expandArgs = append(expandArgs, "--json-output")
+	}
+
+	expandArgs = append(expandArgs, buildMemsearchCommonArgs(ms)...)
+	if err := runMemsearchStreaming(ms, expandArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "Expand failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runMemoryTranscript 查看 JSONL 会话
+func runMemoryTranscript(cmd *cobra.Command, args []string) {
+	jsonlPath := args[0]
+
+	createdAt, messages, err := readTranscriptJSONL(jsonlPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Transcript failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	turns := buildTranscriptTurns(messages)
+	if memoryTranscriptTurn == "" {
+		if memoryTranscriptJSON {
+			outputTranscriptJSON(createdAt, turns)
+			return
+		}
+		outputTranscriptList(turns)
+		return
+	}
+
+	idx := findTurnIndex(turns, memoryTranscriptTurn)
+	if idx < 0 {
+		fmt.Fprintf(os.Stderr, "Turn not found: %s\n", memoryTranscriptTurn)
+		os.Exit(1)
+	}
+
+	start := idx - memoryTranscriptContext
+	if start < 0 {
+		start = 0
+	}
+	end := idx + memoryTranscriptContext
+	if end >= len(turns) {
+		end = len(turns) - 1
+	}
+
+	selection := turns[start : end+1]
+	if memoryTranscriptJSON {
+		outputTranscriptJSON(createdAt, selection)
+		return
+	}
+
+	outputTranscriptContext(selection, turns[idx].ID)
+}
+
+// runMemoryReset 删除索引
+func runMemoryReset(cmd *cobra.Command, args []string) {
+	cfg, err := config.Load("")
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	ms := resolveMemsearchConfig(cfg)
+
+	if err := ensureMemsearchAvailable(ms); err != nil {
+		fmt.Fprintf(os.Stderr, "memsearch not available: %v\n", err)
+		os.Exit(1)
+	}
+
+	resetArgs := []string{"reset"}
+	if memoryResetYes {
+		resetArgs = append(resetArgs, "--yes")
+	}
+	resetArgs = append(resetArgs, buildMemsearchCommonArgs(ms)...)
+
+	if err := runMemsearchStreaming(ms, resetArgs); err != nil {
+		fmt.Fprintf(os.Stderr, "Reset failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+type transcriptTurn struct {
+	ID        string    `json:"id"`
+	Timestamp time.Time `json:"timestamp"`
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+}
+
+func readTranscriptJSONL(filePath string) (time.Time, []session.Message, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	defer file.Close()
+
+	var createdAt time.Time
+	messages := make([]session.Message, 0)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var meta struct {
+			Type      string    `json:"_type"`
+			CreatedAt time.Time `json:"created_at"`
+		}
+		if err := json.Unmarshal([]byte(line), &meta); err == nil && meta.Type == "metadata" {
+			createdAt = meta.CreatedAt
+			continue
+		}
+
+		var msg session.Message
+		if err := json.Unmarshal([]byte(line), &msg); err == nil {
+			messages = append(messages, msg)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return time.Time{}, nil, err
+	}
+
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+
+	return createdAt, messages, nil
+}
+
+func buildTranscriptTurns(messages []session.Message) []transcriptTurn {
+	turns := make([]transcriptTurn, 0, len(messages))
+	for _, msg := range messages {
+		turns = append(turns, transcriptTurn{
+			ID:        buildTranscriptTurnID(msg),
+			Timestamp: msg.Timestamp,
+			Role:      msg.Role,
+			Content:   msg.Content,
+		})
+	}
+	return turns
+}
+
+func buildTranscriptTurnID(msg session.Message) string {
+	h := md5.New()
+	h.Write([]byte(msg.Role))
+	h.Write([]byte("|"))
+	h.Write([]byte(msg.Timestamp.Format(time.RFC3339Nano)))
+	h.Write([]byte("|"))
+	h.Write([]byte(msg.Content))
+	sum := hex.EncodeToString(h.Sum(nil))
+	if len(sum) > 8 {
+		return sum[:8]
+	}
+	return sum
+}
+
+func findTurnIndex(turns []transcriptTurn, prefix string) int {
+	for i, t := range turns {
+		if strings.HasPrefix(t.ID, prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+func outputTranscriptList(turns []transcriptTurn) {
+	fmt.Printf("All turns (%d):\n\n", len(turns))
+	for _, t := range turns {
+		fmt.Printf("  %s  %s  %s\n", t.ID, t.Timestamp.Format("15:04:05"), truncateString(t.Content, 80))
+	}
+}
+
+func outputTranscriptContext(turns []transcriptTurn, focusID string) {
+	for _, t := range turns {
+		prefix := " "
+		if t.ID == focusID {
+			prefix = ">"
+		}
+		fmt.Printf("%s [%s] %s\n", prefix, t.Timestamp.Format("15:04:05"), t.ID)
+		fmt.Printf("%s\n\n", t.Content)
+	}
+}
+
+func outputTranscriptJSON(createdAt time.Time, turns []transcriptTurn) {
+	data := struct {
+		CreatedAt time.Time        `json:"created_at"`
+		Count     int              `json:"count"`
+		Turns     []transcriptTurn `json:"turns"`
+	}{
+		CreatedAt: createdAt,
+		Count:     len(turns),
+		Turns:     turns,
+	}
+
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to marshal JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(jsonData))
+}
+
+func resolveMemsearchConfig(cfg *config.Config) config.MemsearchConfig {
+	ms := cfg.Memory.Memsearch
+	if strings.TrimSpace(ms.Command) == "" {
+		ms.Command = "memsearch"
+	}
+	if strings.TrimSpace(ms.Collection) == "" {
+		ms.Collection = "memsearch_chunks"
+	}
+	if strings.TrimSpace(ms.MilvusURI) == "" {
+		ms.MilvusURI = "~/.memsearch/milvus.db"
+	}
+	if ms.Watch.DebounceMs == 0 {
+		ms.Watch.DebounceMs = 1500
+	}
+	if ms.Chunking.MaxChunkSize == 0 {
+		ms.Chunking.MaxChunkSize = 1500
+	}
+	if ms.Chunking.OverlapLines == 0 {
+		ms.Chunking.OverlapLines = 2
+	}
+	if ms.Sessions.RetentionDays == 0 {
+		ms.Sessions.RetentionDays = 60
+	}
+	if ms.Context.Limit == 0 {
+		ms.Context.Limit = 6
+	}
+	if ms.Compact.LLMProvider == "" {
+		ms.Compact.LLMProvider = "openai"
+	}
+	return ms
+}
+
+func buildMemsearchCommonArgs(cfg config.MemsearchConfig) []string {
+	args := []string{}
+	if strings.TrimSpace(cfg.Provider) != "" {
+		args = append(args, "--provider", cfg.Provider)
+	}
+	if strings.TrimSpace(cfg.Model) != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if strings.TrimSpace(cfg.Collection) != "" {
+		args = append(args, "--collection", cfg.Collection)
+	}
+	if strings.TrimSpace(cfg.MilvusURI) != "" {
+		args = append(args, "--milvus-uri", cfg.MilvusURI)
+	}
+	if strings.TrimSpace(cfg.MilvusToken) != "" {
+		args = append(args, "--milvus-token", cfg.MilvusToken)
+	}
+	return args
+}
+
+func ensureMemsearchAvailable(cfg config.MemsearchConfig) error {
+	cmd := strings.TrimSpace(cfg.Command)
+	if cmd == "" {
+		cmd = "memsearch"
+	}
+	if _, err := exec.LookPath(cmd); err != nil {
 		return err
 	}
-
-	text := string(content)
-	if text == "" {
-		return nil
-	}
-
-	// Split into chunks (paragraphs)
-	chunks := splitIntoChunks(text, 500)
-
-	items := make([]memory.MemoryItem, 0, len(chunks))
-	for i, chunk := range chunks {
-		items = append(items, memory.MemoryItem{
-			Text:   chunk,
-			Source: source,
-			Type:   memType,
-			Metadata: memory.MemoryMetadata{
-				FilePath: filePath,
-				Tags:     []string{"indexed"},
-			},
-		})
-
-		// Add line number hint
-		if i > 0 {
-			items[i-1].Metadata.LineNumber = i * 10
-		}
-	}
-
-	if len(items) > 0 {
-		if err := manager.AddMemoryBatch(ctx, items); err != nil {
-			return fmt.Errorf("failed to add memories: %w", err)
-		}
-	}
-
 	return nil
 }
 
-// splitIntoChunks 将文本分割成块
-func splitIntoChunks(text string, maxChunkSize int) []string {
-	// Simple paragraph-based chunking
-	paragraphs := splitParagraphs(text)
-	chunks := make([]string, 0)
-	currentChunk := ""
-
-	for _, para := range paragraphs {
-		if len(currentChunk)+len(para) > maxChunkSize && currentChunk != "" {
-			chunks = append(chunks, currentChunk)
-			currentChunk = para
-		} else {
-			if currentChunk != "" {
-				currentChunk += "\n\n"
-			}
-			currentChunk += para
-		}
+func runMemsearchStreaming(cfg config.MemsearchConfig, args []string) error {
+	cmd := strings.TrimSpace(cfg.Command)
+	if cmd == "" {
+		cmd = "memsearch"
 	}
-
-	if currentChunk != "" {
-		chunks = append(chunks, currentChunk)
-	}
-
-	return chunks
+	c := exec.Command(cmd, args...)
+	c.Env = memory.BuildMemsearchEnv(cfg)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	return c.Run()
 }
 
-// splitParagraphs 分割段落
-func splitParagraphs(text string) []string {
-	// Split by double newline
-	paragraphs := make([]string, 0)
-	current := ""
-
-	lines := splitLines(text)
-	for _, line := range lines {
-		line = trimSpace(line)
-		if line == "" {
-			if current != "" {
-				paragraphs = append(paragraphs, current)
-				current = ""
-			}
-		} else {
-			if current != "" {
-				current += " "
-			}
-			current += line
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-
-	if current != "" {
-		paragraphs = append(paragraphs, current)
-	}
-
-	return paragraphs
+	return ""
 }
 
-// Helper functions to avoid importing strings package
-func splitLines(s string) []string {
-	lines := make([]string, 0)
-	current := ""
-
-	for _, ch := range s {
-		if ch == '\n' {
-			lines = append(lines, current)
-			current = ""
-		} else {
-			current += string(ch)
-		}
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-
-	if current != "" {
-		lines = append(lines, current)
-	}
-
-	return lines
-}
-
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-
-	return s[start:end]
+	return s[:maxLen] + "..."
 }

@@ -31,11 +31,11 @@ type BuiltinSearchManager struct {
 
 // QMDSearchManager QMD 后端实现
 type QMDSearchManager struct {
-	qmdMgr       *qmd.QMDManager
-	fallbackMgr  MemorySearchManager // 回退到 builtin
-	useFallback  bool
-	config       config.QMDConfig
-	workspace    string
+	qmdMgr      *qmd.QMDManager
+	fallbackMgr MemorySearchManager // 回退到 builtin
+	useFallback bool
+	config      config.QMDConfig
+	workspace   string
 }
 
 // NewBuiltinSearchManager 创建 builtin 搜索管理器
@@ -129,16 +129,16 @@ func NewQMDSearchManager(qmdCfg config.QMDConfig, workspace string) (MemorySearc
 			RetentionDays: qmdCfg.Sessions.RetentionDays,
 		},
 		Update: qmd.QMDUpdateConfig{
-			Interval:        qmdCfg.Update.Interval,
-			OnBoot:          qmdCfg.Update.OnBoot,
-			EmbedInterval:   qmdCfg.Update.EmbedInterval,
-			CommandTimeout:  qmdCfg.Update.CommandTimeout,
-			UpdateTimeout:   qmdCfg.Update.UpdateTimeout,
+			Interval:       qmdCfg.Update.Interval,
+			OnBoot:         qmdCfg.Update.OnBoot,
+			EmbedInterval:  qmdCfg.Update.EmbedInterval,
+			CommandTimeout: qmdCfg.Update.CommandTimeout,
+			UpdateTimeout:  qmdCfg.Update.UpdateTimeout,
 		},
 		Limits: qmd.QMDLimitsConfig{
-			MaxResults:     qmdCfg.Limits.MaxResults,
+			MaxResults:      qmdCfg.Limits.MaxResults,
 			MaxSnippetChars: qmdCfg.Limits.MaxSnippetChars,
-			TimeoutMs:      qmdCfg.Limits.TimeoutMs,
+			TimeoutMs:       qmdCfg.Limits.TimeoutMs,
 		},
 	}
 
@@ -215,8 +215,8 @@ func (m *QMDSearchManager) Search(ctx context.Context, query string, opts Search
 			VectorEmbedding: VectorEmbedding{
 				Text: r.Snippet,
 				Metadata: MemoryMetadata{
-					FilePath:    r.Path,
-					LineNumber:  r.Line,
+					FilePath:   r.Path,
+					LineNumber: r.Line,
 				},
 			},
 			Score: r.Score,
@@ -277,13 +277,15 @@ func (m *QMDSearchManager) Close() error {
 // GetMemorySearchManager 根据配置创建搜索管理器
 func GetMemorySearchManager(cfg config.MemoryConfig, workspace string) (MemorySearchManager, error) {
 	switch cfg.Backend {
+	case "memsearch", "":
+		return NewMemsearchSearchManager(cfg.Memsearch, workspace)
 	case "qmd":
 		if cfg.QMD.Enabled {
 			return NewQMDSearchManager(cfg.QMD, workspace)
 		}
 		// 回退到 builtin
 		return GetBuiltinSearchManager(cfg, workspace)
-	case "builtin", "":
+	case "builtin":
 		return GetBuiltinSearchManager(cfg, workspace)
 	default:
 		return nil, fmt.Errorf("unknown memory backend: %s", cfg.Backend)

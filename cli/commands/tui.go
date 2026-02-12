@@ -17,6 +17,7 @@ import (
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
+	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
@@ -101,7 +102,17 @@ func runTUI(cmd *cobra.Command, args []string) {
 	}
 
 	// Create memory store
-	memoryStore := agent.NewMemoryStore(workspace)
+	var searchMgr memory.MemorySearchManager
+	searchMgr, err = memory.GetMemorySearchManager(cfg.Memory, workspace)
+	if err != nil {
+		logger.Warn("Failed to create memory search manager", zap.Error(err))
+	}
+
+	contextCfg := cfg.Memory.Memsearch.Context
+	if contextCfg.Limit == 0 {
+		contextCfg.Limit = 6
+	}
+	memoryStore := agent.NewMemoryStore(workspace, searchMgr, contextCfg.Query, contextCfg.Limit, contextCfg.Enabled)
 	_ = memoryStore.EnsureBootstrapFiles()
 
 	// Create context builder
@@ -109,6 +120,12 @@ func runTUI(cmd *cobra.Command, args []string) {
 
 	// Create tool registry
 	toolRegistry := tools.NewRegistry()
+
+	// Register memory tools
+	if searchMgr != nil {
+		_ = toolRegistry.Register(tools.NewMemoryTool(searchMgr))
+		_ = toolRegistry.Register(tools.NewMemoryAddTool(searchMgr))
+	}
 
 	// Register file system tool
 	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspace)
@@ -215,7 +232,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 			result[tool.Name()] = map[string]interface{}{
 				"name":        tool.Name(),
 				"description": tool.Description(),
-				"parameters": tool.Parameters(),
+				"parameters":  tool.Parameters(),
 			}
 		}
 		return result, nil

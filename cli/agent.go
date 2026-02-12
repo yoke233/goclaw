@@ -12,6 +12,7 @@ import (
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
+	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
@@ -97,8 +98,18 @@ func runAgent(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create memory store
-	memoryStore := agent.NewMemoryStore(workspace)
+	// Create memory store (memsearch)
+	var searchMgr memory.MemorySearchManager
+	searchMgr, err = memory.GetMemorySearchManager(cfg.Memory, workspace)
+	if err != nil && agentVerbose {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to create memory search manager: %v\n", err)
+	}
+
+	contextCfg := cfg.Memory.Memsearch.Context
+	if contextCfg.Limit == 0 {
+		contextCfg.Limit = 6
+	}
+	memoryStore := agent.NewMemoryStore(workspace, searchMgr, contextCfg.Query, contextCfg.Limit, contextCfg.Enabled)
 	if err := memoryStore.EnsureBootstrapFiles(); err != nil {
 		if agentVerbose {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to create bootstrap files: %v\n", err)
@@ -110,6 +121,16 @@ func runAgent(cmd *cobra.Command, args []string) {
 
 	// Create tool registry
 	toolRegistry := agent.NewToolRegistry()
+
+	// Register memory tools
+	if searchMgr != nil {
+		if err := toolRegistry.RegisterExisting(tools.NewMemoryTool(searchMgr)); err != nil && agentVerbose {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to register memory_search tool: %v\n", err)
+		}
+		if err := toolRegistry.RegisterExisting(tools.NewMemoryAddTool(searchMgr)); err != nil && agentVerbose {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to register memory_add tool: %v\n", err)
+		}
+	}
 
 	// Register file system tool
 	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspace)

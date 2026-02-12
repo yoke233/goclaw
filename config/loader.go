@@ -96,6 +96,21 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.browser.enabled", false)
 	v.SetDefault("browser.headless", true)
 	v.SetDefault("browser.timeout", 30)
+
+	// Memory 默认配置（memsearch）
+	v.SetDefault("memory.backend", "memsearch")
+	v.SetDefault("memory.memsearch.command", "memsearch")
+	v.SetDefault("memory.memsearch.collection", "memsearch_chunks")
+	v.SetDefault("memory.memsearch.milvus_uri", "~/.memsearch/milvus.db")
+	v.SetDefault("memory.memsearch.watch.debounce_ms", 1500)
+	v.SetDefault("memory.memsearch.chunking.max_chunk_size", 1500)
+	v.SetDefault("memory.memsearch.chunking.overlap_lines", 2)
+	v.SetDefault("memory.memsearch.compact.llm_provider", "openai")
+	v.SetDefault("memory.memsearch.sessions.enabled", true)
+	v.SetDefault("memory.memsearch.sessions.retention_days", 60)
+	v.SetDefault("memory.memsearch.sessions.redact", false)
+	v.SetDefault("memory.memsearch.context.enabled", false)
+	v.SetDefault("memory.memsearch.context.limit", 6)
 }
 
 // Save 保存配置到文件

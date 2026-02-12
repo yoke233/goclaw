@@ -20,6 +20,7 @@ import (
 	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/internal/workspace"
+	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
@@ -177,14 +178,34 @@ func runStart(cmd *cobra.Command, args []string) {
 		logger.Fatal("Failed to create session manager", zap.Error(err))
 	}
 
-	// 创建记忆存储
-	memoryStore := agent.NewMemoryStore(workspaceDir)
+	// 创建记忆存储（memsearch）
+	var searchMgr memory.MemorySearchManager
+	searchMgr, err = memory.GetMemorySearchManager(cfg.Memory, workspaceDir)
+	if err != nil {
+		logger.Warn("Failed to create memory search manager", zap.Error(err))
+	}
+
+	contextCfg := cfg.Memory.Memsearch.Context
+	if contextCfg.Limit == 0 {
+		contextCfg.Limit = 6
+	}
+	memoryStore := agent.NewMemoryStore(workspaceDir, searchMgr, contextCfg.Query, contextCfg.Limit, contextCfg.Enabled)
 
 	// 创建上下文构建器
 	contextBuilder := agent.NewContextBuilder(memoryStore, workspaceDir)
 
 	// 创建工具注册表
 	toolRegistry := agent.NewToolRegistry()
+
+	// 注册 memory 工具
+	if searchMgr != nil {
+		if err := toolRegistry.RegisterExisting(tools.NewMemoryTool(searchMgr)); err != nil {
+			logger.Warn("Failed to register memory_search tool", zap.Error(err))
+		}
+		if err := toolRegistry.RegisterExisting(tools.NewMemoryAddTool(searchMgr)); err != nil {
+			logger.Warn("Failed to register memory_add tool", zap.Error(err))
+		}
+	}
 
 	// 创建技能加载器（统一使用 ~/.goclaw/skills 目录）
 	goclawDir := os.Getenv("HOME") + "/.goclaw"
