@@ -40,7 +40,8 @@ func TestSubagentSpawnToolExecuteReadsRequesterContext(t *testing.T) {
 	ctx = context.WithValue(ctx, agentruntime.CtxChatID, "chat42")
 
 	result, err := tool.Execute(ctx, map[string]interface{}{
-		"task": "implement backend API",
+		"task":    "implement backend API",
+		"task_id": "task-42",
 	})
 	if err != nil {
 		t.Fatalf("Execute() returned error: %v", err)
@@ -72,6 +73,9 @@ func TestSubagentSpawnToolExecuteReadsRequesterContext(t *testing.T) {
 	}
 	if registry.params.TimeoutSeconds != 321 {
 		t.Fatalf("TimeoutSeconds = %d, want %d", registry.params.TimeoutSeconds, 321)
+	}
+	if registry.params.TaskID != "task-42" {
+		t.Fatalf("TaskID = %q, want %q", registry.params.TaskID, "task-42")
 	}
 	if registry.params.ArchiveAfterMinutes != 77 {
 		t.Fatalf("ArchiveAfterMinutes = %d, want %d", registry.params.ArchiveAfterMinutes, 77)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
+	taskstore "github.com/smallnest/goclaw/agent/tasks"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
 )
@@ -20,6 +21,72 @@ type mockSubagentRuntime struct {
 	waitCalled chan string
 	waitResult *agentruntime.SubagentRunResult
 	waitErr    error
+}
+
+type mockTaskStore struct {
+	mu          sync.Mutex
+	statusByID  map[string]taskstore.TaskStatus
+	progressLog []taskstore.AppendProgressInput
+	runToTask   map[string]string
+}
+
+func newMockTaskStore() *mockTaskStore {
+	return &mockTaskStore{
+		statusByID:  make(map[string]taskstore.TaskStatus),
+		progressLog: make([]taskstore.AppendProgressInput, 0),
+		runToTask:   make(map[string]string),
+	}
+}
+
+func (m *mockTaskStore) Close() error { return nil }
+
+func (m *mockTaskStore) CreateRequirement(title, description string) (*taskstore.Requirement, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) CreateTask(input taskstore.CreateTaskInput) (*taskstore.Task, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) AssignTaskRole(taskID, role, assignee string) error { return nil }
+
+func (m *mockTaskStore) UpdateTaskStatus(taskID string, status taskstore.TaskStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statusByID[taskID] = status
+	return nil
+}
+
+func (m *mockTaskStore) AppendTaskProgress(input taskstore.AppendProgressInput) (*taskstore.TaskProgressEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.progressLog = append(m.progressLog, input)
+	return &taskstore.TaskProgressEntry{TaskID: input.TaskID, RunID: input.RunID, Status: input.Status, Message: input.Message}, nil
+}
+
+func (m *mockTaskStore) ListTasksByRequirement(requirementID string) ([]*taskstore.Task, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) ListTaskProgress(taskID string, limit int) ([]*taskstore.TaskProgressEntry, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) GetTaskBoardSummary(requirementID string) (*taskstore.TaskBoardSummary, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) LinkSubagentRun(runID, taskID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runToTask[runID] = taskID
+	return nil
+}
+
+func (m *mockTaskStore) ResolveTaskByRun(runID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.runToTask[runID], nil
 }
 
 func (m *mockSubagentRuntime) Spawn(_ context.Context, req agentruntime.SubagentRunRequest) (string, error) {
@@ -50,10 +117,12 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 			Output: "frontend task done",
 		},
 	}
+	taskStore := newMockTaskStore()
 
 	mgr := &AgentManager{
 		subagentRegistry: NewSubagentRegistry(tmp),
 		subagentRuntime:  runtime,
+		taskStore:        taskStore,
 		workspace:        tmp,
 		cfg: &config.Config{
 			Agents: config.AgentsConfig{
@@ -73,6 +142,7 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 		ChildSessionKey:     "agent:default:subagent:abc",
 		RequesterSessionKey: "telegram:bot1:chat42",
 		Task:                "[frontend] build login page",
+		TaskID:              "task-1",
 		Cleanup:             "keep",
 		ArchiveAfterMinutes: 60,
 	})
@@ -136,6 +206,23 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run outcome not updated before timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		taskStore.mu.Lock()
+		status := taskStore.statusByID["task-1"]
+		progressCount := len(taskStore.progressLog)
+		linkedTaskID := taskStore.runToTask["run-1"]
+		taskStore.mu.Unlock()
+
+		if status == taskstore.StatusDone && progressCount >= 2 && linkedTaskID == "task-1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task store was not updated as expected: status=%s progress=%d linkedTaskID=%q", status, progressCount, linkedTaskID)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

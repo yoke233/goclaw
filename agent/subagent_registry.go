@@ -37,6 +37,7 @@ type SubagentRunRecord struct {
 	RequesterOrigin     *DeliveryContext    `json:"requester_origin,omitempty"`
 	RequesterDisplayKey string              `json:"requester_display_key"`
 	Task                string              `json:"task"`
+	TaskID              string              `json:"task_id,omitempty"`
 	Cleanup             string              `json:"cleanup"` // delete, keep
 	Label               string              `json:"label,omitempty"`
 	TimeoutSeconds      int                 `json:"timeout_seconds,omitempty"`
@@ -91,6 +92,7 @@ func (r *SubagentRegistry) RegisterRun(params *SubagentRunParams) error {
 		RequesterOrigin:     params.RequesterOrigin,
 		RequesterDisplayKey: params.RequesterDisplayKey,
 		Task:                params.Task,
+		TaskID:              params.TaskID,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
 		TimeoutSeconds:      params.TimeoutSeconds,
@@ -128,6 +130,7 @@ type SubagentRunParams struct {
 	RequesterOrigin     *DeliveryContext
 	RequesterDisplayKey string
 	Task                string
+	TaskID              string
 	Cleanup             string
 	Label               string
 	TimeoutSeconds      int

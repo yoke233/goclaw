@@ -2,6 +2,8 @@ module github.com/smallnest/goclaw
 
 go 1.25
 
+replace github.com/cexll/agentsdk-go => ../agentsdk-go
+
 require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/chzyer/readline v1.5.1

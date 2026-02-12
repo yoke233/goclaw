@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/smallnest/goclaw/agent"
@@ -13,10 +14,8 @@ import (
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/memory"
-	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var agentCmd = &cobra.Command{
@@ -116,9 +115,6 @@ func runAgent(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Create context builder
-	contextBuilder := agent.NewContextBuilder(memoryStore, workspace)
-
 	// Create tool registry
 	toolRegistry := agent.NewToolRegistry()
 
@@ -194,19 +190,17 @@ func runAgent(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to register use_skill: %v\n", err)
 	}
 
-	// Create skills loader
-	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
-	if err := skillsLoader.Discover(); err != nil && agentVerbose {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to discover skills: %v\n", err)
-	}
-
-	// Create LLM provider
-	provider, err := providers.NewProvider(cfg)
+	// Create main runtime
+	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
+		Config:           cfg,
+		Tools:            toolRegistry,
+		DefaultWorkspace: workspace,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create LLM provider: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create main runtime: %v\n", err)
 		os.Exit(1)
 	}
-	defer provider.Close()
+	defer func() { _ = mainRuntime.Close() }()
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(agentTimeout)*time.Second)
@@ -232,72 +226,27 @@ func runAgent(cmd *cobra.Command, args []string) {
 		Timestamp: time.Now(),
 	})
 
-	// Create new agent
-	agentInstance, err := agent.NewAgent(&agent.NewAgentConfig{
-		Bus:          messageBus,
-		Provider:     provider,
-		SessionMgr:   sessionMgr,
-		Tools:        toolRegistry,
-		Context:      contextBuilder,
+	runResp, err := mainRuntime.Run(ctx, agent.MainRunRequest{
+		AgentID:      strings.TrimSpace(agentTo),
+		SessionKey:   sessionKey,
+		Prompt:       agentMessage,
+		SystemPrompt: "",
 		Workspace:    workspace,
-		MaxIteration: cfg.Agents.Defaults.MaxIterations,
+		Metadata: map[string]any{
+			"channel": agentChannel,
+		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Agent execution failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Publish message to bus for processing
-	inboundMsg := &bus.InboundMessage{
-		Channel:   agentChannel,
-		SenderID:  "cli",
-		ChatID:    "default",
-		Content:   agentMessage,
-		Timestamp: time.Now(),
+	response := ""
+	if runResp != nil {
+		response = strings.TrimSpace(runResp.Output)
 	}
-
-	if err := messageBus.PublishInbound(ctx, inboundMsg); err != nil {
-		if agentJSON {
-			errorResult := map[string]interface{}{
-				"error":   err.Error(),
-				"success": false,
-			}
-			data, _ := json.MarshalIndent(errorResult, "", "  ")
-			fmt.Println(string(data))
-		} else {
-			fmt.Fprintf(os.Stderr, "Error publishing message: %v\n", err)
-		}
-		os.Exit(1)
-	}
-
-	// Start the agent to process the message
-	go func() {
-		if err := agentInstance.Start(ctx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-			logger.Error("Agent error", zap.Error(err))
-		}
-	}()
-
-	// Consume outbound message
-	outbound, err := messageBus.ConsumeOutbound(ctx)
-	if err != nil {
-		if agentJSON {
-			errorResult := map[string]interface{}{
-				"error":   err.Error(),
-				"success": false,
-			}
-			data, _ := json.MarshalIndent(errorResult, "", "  ")
-			fmt.Println(string(data))
-		} else {
-			fmt.Fprintf(os.Stderr, "Error consuming response: %v\n", err)
-		}
-		os.Exit(1)
-	}
-
-	response := outbound.Content
-
-	// Stop the agent
-	if err := agentInstance.Stop(); err != nil && agentVerbose {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to stop agent: %v\n", err)
+	if response == "" {
+		response = "(no output)"
 	}
 
 	// Add assistant response to session

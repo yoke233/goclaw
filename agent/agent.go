@@ -422,6 +422,13 @@ func (a *Agent) GetCurrentChatID() string {
 	return "main"
 }
 
+// GetWorkspace returns the agent workspace path.
+func (a *Agent) GetWorkspace() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.workspace
+}
+
 // GetOrchestrator 获取 orchestrator（供 AgentManager 使用）
 func (a *Agent) GetOrchestrator() *Orchestrator {
 	return a.orchestrator

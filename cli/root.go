@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
+	"path/filepath"
 	"syscall"
 
 	"github.com/smallnest/goclaw/agent"
-	agentruntime "github.com/smallnest/goclaw/agent/runtime"
+	taskstore "github.com/smallnest/goclaw/agent/tasks"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/channels"
@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(commands.HealthCommand())
 	rootCmd.AddCommand(commands.StatusCommand())
 	rootCmd.AddCommand(commands.ChannelsCommand())
+	rootCmd.AddCommand(commands.TaskCommand())
 
 	// Register approvals, cron, system commands (registered via init)
 	// These commands auto-register themselves
@@ -283,6 +284,17 @@ func runStart(cmd *cobra.Command, args []string) {
 		logger.Info("Browser tools registered")
 	}
 
+	// 初始化主执行运行时（agentsdk 主链路）
+	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
+		Config:           cfg,
+		Tools:            toolRegistry,
+		DefaultWorkspace: workspaceDir,
+	})
+	if err != nil {
+		logger.Fatal("Failed to initialize main runtime", zap.Error(err))
+	}
+	defer func() { _ = mainRuntime.Close() }()
+
 	// 创建 LLM 提供商
 	provider, err := providers.NewProvider(cfg)
 	if err != nil {
@@ -310,42 +322,19 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 创建调度器
 	scheduler := cron.NewScheduler(messageBus, provider, sessionMgr)
 
-	// 初始化分身运行时
-	subagentCfg := cfg.Agents.Defaults.Subagents
-	roleLimits := map[string]int{
-		agentruntime.RoleFrontend: 5,
-		agentruntime.RoleBackend:  4,
+	// 初始化任务存储
+	taskDBPath := filepath.Join(workspaceDir, "data", "tasks.db")
+	taskStore, err := taskstore.NewSQLiteStore(taskDBPath)
+	if err != nil {
+		logger.Warn("Failed to initialize task store", zap.Error(err))
+	} else {
+		defer func() { _ = taskStore.Close() }()
+		logger.Info("Task store initialized", zap.String("path", taskDBPath))
 	}
-	defaultMaxConcurrent := 8
-	if subagentCfg != nil {
-		if subagentCfg.MaxConcurrent > 0 {
-			defaultMaxConcurrent = subagentCfg.MaxConcurrent
-		}
-		if subagentCfg.FrontendMaxConcurrent > 0 {
-			roleLimits[agentruntime.RoleFrontend] = subagentCfg.FrontendMaxConcurrent
-		}
-		if subagentCfg.BackendMaxConcurrent > 0 {
-			roleLimits[agentruntime.RoleBackend] = subagentCfg.BackendMaxConcurrent
-		}
-	}
-	rolePool := agentruntime.NewSimpleRolePool(defaultMaxConcurrent, roleLimits)
 
-	subagentModel := "claude-sonnet-4-5"
-	maxTokens := cfg.Agents.Defaults.MaxTokens
-	temperature := cfg.Agents.Defaults.Temperature
-	if subagentCfg != nil && strings.TrimSpace(subagentCfg.Model) != "" {
-		subagentModel = strings.TrimSpace(subagentCfg.Model)
-	}
-	subagentRuntime := agentruntime.NewAgentsdkRuntime(agentruntime.AgentsdkRuntimeOptions{
-		Pool:             rolePool,
-		AnthropicAPIKey:  strings.TrimSpace(cfg.Providers.Anthropic.APIKey),
-		AnthropicBaseURL: strings.TrimSpace(cfg.Providers.Anthropic.BaseURL),
-		ModelName:        subagentModel,
-		MaxTokens:        maxTokens,
-		Temperature:      temperature,
-		MaxIterations:    cfg.Agents.Defaults.MaxIterations,
-		FallbackProvider: provider,
-	})
+	// 初始化分身运行时（支持 runtime 配置切换）
+	subagentRuntime, runtimeMode := buildSubagentRuntime(cfg, provider)
+	logger.Info("Subagent runtime initialized", zap.String("runtime_mode", runtimeMode))
 
 	// 创建 AgentManager
 	agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
@@ -356,6 +345,8 @@ func runStart(cmd *cobra.Command, args []string) {
 		DataDir:         workspaceDir, // 使用 workspace 作为数据目录
 		Workspace:       workspaceDir,
 		SubagentRuntime: subagentRuntime,
+		MainRuntime:     mainRuntime,
+		TaskStore:       taskStore,
 	})
 
 	// 从配置设置 Agent 和绑定

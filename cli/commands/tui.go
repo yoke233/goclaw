@@ -18,7 +18,6 @@ import (
 	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/memory"
-	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -115,26 +114,23 @@ func runTUI(cmd *cobra.Command, args []string) {
 	memoryStore := agent.NewMemoryStore(workspace, searchMgr, contextCfg.Query, contextCfg.Limit, contextCfg.Enabled)
 	_ = memoryStore.EnsureBootstrapFiles()
 
-	// Create context builder
-	contextBuilder := agent.NewContextBuilder(memoryStore, workspace)
-
 	// Create tool registry
-	toolRegistry := tools.NewRegistry()
+	toolRegistry := agent.NewToolRegistry()
 
 	// Register memory tools
 	if searchMgr != nil {
-		_ = toolRegistry.Register(tools.NewMemoryTool(searchMgr))
-		_ = toolRegistry.Register(tools.NewMemoryAddTool(searchMgr))
+		_ = toolRegistry.RegisterExisting(tools.NewMemoryTool(searchMgr))
+		_ = toolRegistry.RegisterExisting(tools.NewMemoryAddTool(searchMgr))
 	}
 
 	// Register file system tool
 	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspace)
 	for _, tool := range fsTool.GetTools() {
-		_ = toolRegistry.Register(tool)
+		_ = toolRegistry.RegisterExisting(tool)
 	}
 
 	// Register use_skill tool
-	_ = toolRegistry.Register(tools.NewUseSkillTool())
+	_ = toolRegistry.RegisterExisting(tools.NewUseSkillTool())
 
 	// Register shell tool
 	shellTool := tools.NewShellTool(
@@ -146,7 +142,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		cfg.Tools.Shell.Sandbox,
 	)
 	for _, tool := range shellTool.GetTools() {
-		_ = toolRegistry.Register(tool)
+		_ = toolRegistry.RegisterExisting(tool)
 	}
 
 	// Register web tool
@@ -156,7 +152,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		cfg.Tools.Web.Timeout,
 	)
 	for _, tool := range webTool.GetTools() {
-		_ = toolRegistry.Register(tool)
+		_ = toolRegistry.RegisterExisting(tool)
 	}
 
 	// Register smart search
@@ -164,7 +160,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 	if cfg.Tools.Browser.Timeout > 0 {
 		browserTimeout = cfg.Tools.Browser.Timeout
 	}
-	_ = toolRegistry.Register(tools.NewSmartSearch(webTool, true, browserTimeout).GetTool())
+	_ = toolRegistry.RegisterExisting(tools.NewSmartSearch(webTool, true, browserTimeout).GetTool())
 
 	// Register browser tool
 	if cfg.Tools.Browser.Enabled {
@@ -173,17 +169,9 @@ func runTUI(cmd *cobra.Command, args []string) {
 			cfg.Tools.Browser.Timeout,
 		)
 		for _, tool := range browserTool.GetTools() {
-			_ = toolRegistry.Register(tool)
+			_ = toolRegistry.RegisterExisting(tool)
 		}
 	}
-
-	// Create LLM provider
-	provider, err := providers.NewProvider(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create LLM provider: %v\n", err)
-		os.Exit(1)
-	}
-	defer provider.Close()
 
 	// Create skills loader（统一使用 ~/.goclaw/skills 目录）
 	goclawDir := os.Getenv("HOME") + "/.goclaw"
@@ -197,6 +185,17 @@ func runTUI(cmd *cobra.Command, args []string) {
 			logger.Info("Skills loaded", zap.Int("count", len(skills)))
 		}
 	}
+
+	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
+		Config:           cfg,
+		Tools:            toolRegistry,
+		DefaultWorkspace: workspace,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create main runtime: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = mainRuntime.Close() }()
 
 	// Always create a new session (unless explicitly specified)
 	var sess *session.Session
@@ -226,7 +225,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 	cmdRegistry.SetSessionManager(sessionMgr)
 	cmdRegistry.SetToolGetter(func() (map[string]interface{}, error) {
 		// 从 toolRegistry 获取工具信息
-		existingTools := toolRegistry.List()
+		existingTools := toolRegistry.ListExisting()
 		result := make(map[string]interface{})
 		for _, tool := range existingTools {
 			result[tool.Name()] = map[string]interface{}{
@@ -279,7 +278,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 		defer msgCancel()
 
-		response, err := runAgentIteration(msgCtx, sess, provider, contextBuilder, toolRegistry, skillsLoader, cfg.Agents.Defaults.MaxIterations, cmdRegistry)
+		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		} else {
@@ -362,7 +361,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		timeout := time.Duration(tuiTimeoutMs) * time.Millisecond
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 
-		response, err := runAgentIteration(msgCtx, sess, provider, contextBuilder, toolRegistry, skillsLoader, cfg.Agents.Defaults.MaxIterations, cmdRegistry)
+		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry)
 		msgCancel()
 
 		if err != nil {
@@ -381,198 +380,52 @@ func runTUI(cmd *cobra.Command, args []string) {
 	}
 }
 
-// runAgentIteration runs a single agent iteration (copied from chat.go)
+// runAgentIteration runs a single agent turn via the shared main runtime.
 func runAgentIteration(
 	ctx context.Context,
 	sess *session.Session,
-	provider providers.Provider,
-	contextBuilder *agent.ContextBuilder,
-	toolRegistry *tools.Registry,
-	skillsLoader *agent.SkillsLoader,
-	maxIterations int,
+	mainRuntime agent.MainRuntime,
+	toolRegistry *agent.ToolRegistry,
 	cmdRegistry *CommandRegistry,
 ) (string, error) {
-	iteration := 0
-	var lastResponse string
-
-	// 重置停止标志
-	if cmdRegistry != nil {
-		cmdRegistry.ResetStop()
+	if cmdRegistry != nil && cmdRegistry.IsStopped() {
+		return "", nil
+	}
+	if mainRuntime == nil {
+		return "", fmt.Errorf("main runtime is not initialized")
+	}
+	if sess == nil {
+		return "", fmt.Errorf("session is nil")
+	}
+	if len(toolRegistry.ListExisting()) == 0 {
+		logger.Warn("No tools registered for TUI main runtime")
 	}
 
-	// 创建失败追踪器
-	failureTracker := NewFailureTracker()
-
-	// 获取可用的工具名称列表（用于错误提示）
-	availableTools := getAvailableToolNames(toolRegistry)
-
-	// Get loaded skills
-	loadedSkills := getLoadedSkills(sess)
-
-	for iteration < maxIterations {
-		iteration++
-		logger.Debug("Agent iteration",
-			zap.Int("iteration", iteration),
-			zap.Int("max_iterations", maxIterations))
-
-		// 检查停止标志
-		if cmdRegistry != nil && cmdRegistry.IsStopped() {
-			logger.Info("Agent run stopped by /stop command")
-			return lastResponse, nil
-		}
-
-		// Get available skills
-		var skills []*agent.Skill
-		if skillsLoader != nil {
-			skills = skillsLoader.List()
-		}
-
-		// Build messages
-		history := sess.GetHistory(tuiHistoryLimit)
-
-		// 检查是否需要添加错误处理指导
-		var errorGuidance string
-		if shouldUseErrorGuidance(history) {
-			failedTools := failureTracker.GetFailedToolNames()
-			errorGuidance = "\n\n## 重要提示\n\n"
-			errorGuidance += "检测到工具调用连续失败。请仔细分析错误原因，并尝试以下策略：\n"
-			errorGuidance += "1. 检查失败的工具是否使用了正确的参数\n"
-			errorGuidance += "2. 尝试使用其他可用的工具完成任务（参考上面的工具列表）\n"
-			errorGuidance += "3. 如果所有工具都无法完成任务，向用户说明情况\n"
-			if len(failedTools) > 0 {
-				errorGuidance += fmt.Sprintf("\n**失败的工具**: %s\n", strings.Join(failedTools, ", "))
-			}
-			logger.Info("Added error guidance due to consecutive failures",
-				zap.Strings("failed_tools", failedTools))
-		}
-
-		// 如果有错误指导，追加到最后一条用户消息中
-		if errorGuidance != "" && len(history) > 0 {
-			// 找到最后一条用户消息并追加错误指导
-			for i := len(history) - 1; i >= 0; i-- {
-				if history[i].Role == "user" {
-					history[i].Content += errorGuidance
-					break
-				}
-			}
-		}
-
-		messages := contextBuilder.BuildMessages(history, "", skills, loadedSkills)
-		providerMessages := make([]providers.Message, len(messages))
-		for i, msg := range messages {
-			var tcs []providers.ToolCall
-			for _, tc := range msg.ToolCalls {
-				tcs = append(tcs, providers.ToolCall{
-					ID:     tc.ID,
-					Name:   tc.Name,
-					Params: tc.Params,
-				})
-			}
-			providerMessages[i] = providers.Message{
-				Role:       msg.Role,
-				Content:    msg.Content,
-				ToolCallID: msg.ToolCallID,
-				ToolCalls:  tcs,
-			}
-		}
-
-		// Prepare tool definitions
-		var toolDefs []providers.ToolDefinition
-		if toolRegistry != nil {
-			toolList := toolRegistry.List()
-			for _, t := range toolList {
-				toolDefs = append(toolDefs, providers.ToolDefinition{
-					Name:        t.Name(),
-					Description: t.Description(),
-					Parameters:  t.Parameters(),
-				})
-			}
-		}
-
-		// Call LLM
-		response, err := provider.Chat(ctx, providerMessages, toolDefs)
-		if err != nil {
-			return "", fmt.Errorf("LLM call failed: %w", err)
-		}
-
-		// Check for tool calls
-		if len(response.ToolCalls) > 0 {
-			logger.Debug("LLM returned tool calls",
-				zap.Int("count", len(response.ToolCalls)),
-				zap.Int("iteration", iteration))
-
-			var assistantToolCalls []session.ToolCall
-			for _, tc := range response.ToolCalls {
-				assistantToolCalls = append(assistantToolCalls, session.ToolCall{
-					ID:     tc.ID,
-					Name:   tc.Name,
-					Params: tc.Params,
-				})
-			}
-			sess.AddMessage(session.Message{
-				Role:      "assistant",
-				Content:   response.Content,
-				ToolCalls: assistantToolCalls,
-			})
-
-			// Execute tool calls
-			hasNewSkill := false
-			for _, tc := range response.ToolCalls {
-				logger.Debug("Executing tool",
-					zap.String("tool", tc.Name),
-					zap.Int("iteration", iteration))
-
-				fmt.Fprint(os.Stderr, ".")
-				result, err := toolRegistry.Execute(ctx, tc.Name, tc.Params)
-				fmt.Fprint(os.Stderr, "")
-
-				if err != nil {
-					logger.Error("Tool execution failed",
-						zap.String("tool", tc.Name),
-						zap.Error(err))
-					failureTracker.RecordFailure(tc.Name)
-					// 使用增强的错误格式化
-					result = formatToolError(tc.Name, tc.Params, err, availableTools)
-				} else {
-					failureTracker.RecordSuccess(tc.Name)
-				}
-
-				// Check for use_skill
-				if tc.Name == "use_skill" {
-					hasNewSkill = true
-					if skillName, ok := tc.Params["skill_name"].(string); ok {
-						loadedSkills = append(loadedSkills, skillName)
-						setLoadedSkills(sess, loadedSkills)
-					}
-				}
-
-				sess.AddMessage(session.Message{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-					Metadata: map[string]interface{}{
-						"tool_name": tc.Name,
-					},
-				})
-			}
-
-			if hasNewSkill {
-				continue
-			}
-			continue
-		}
-
-		// No tool calls, return response
-		lastResponse = response.Content
-		break
+	history := sess.GetHistory(1)
+	prompt := ""
+	if len(history) > 0 {
+		prompt = strings.TrimSpace(history[len(history)-1].Content)
+	}
+	if prompt == "" {
+		return "", nil
 	}
 
-	if iteration >= maxIterations {
-		logger.Warn("Agent reached max iterations",
-			zap.Int("max", maxIterations))
+	resp, err := mainRuntime.Run(ctx, agent.MainRunRequest{
+		AgentID:    "default",
+		SessionKey: sess.Key,
+		Prompt:     prompt,
+		Metadata: map[string]any{
+			"channel": "tui",
+			"chat_id": sess.Key,
+		},
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return lastResponse, nil
+	if resp == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(resp.Output), nil
 }
 
 // getLoadedSkills from session

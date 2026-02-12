@@ -37,6 +37,7 @@ type SubagentRunParams struct {
 	RequesterOrigin     *DeliveryContext
 	RequesterDisplayKey string
 	Task                string
+	TaskID              string
 	Cleanup             string
 	Label               string
 	TimeoutSeconds      int
@@ -150,6 +151,7 @@ func GenerateRunID() string {
 // SubagentSpawnToolParams 分身生成工具参数
 type SubagentSpawnToolParams struct {
 	Task              string `json:"task"`                          // 任务描述（必填）
+	TaskID            string `json:"task_id,omitempty"`             // 关联任务 ID
 	Label             string `json:"label,omitempty"`               // 可选标签
 	AgentID           string `json:"agent_id,omitempty"`            // 目标 Agent ID
 	Model             string `json:"model,omitempty"`               // 模型覆盖
@@ -231,6 +233,10 @@ func (t *SubagentSpawnTool) Parameters() map[string]interface{} {
 			"label": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional label for the sub-agent run.",
+			},
+			"task_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional task ID used by task management for tracking progress.",
 			},
 			"agent_id": map[string]interface{}{
 				"type":        "string",
@@ -357,6 +363,7 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		RequesterOrigin:     requesterOrigin,
 		RequesterDisplayKey: requesterSessionKey,
 		Task:                spawnParams.Task,
+		TaskID:              spawnParams.TaskID,
 		Cleanup:             spawnParams.Cleanup,
 		Label:               spawnParams.Label,
 		TimeoutSeconds:      timeoutSeconds,
@@ -428,6 +435,13 @@ func (t *SubagentSpawnTool) parseParams(params map[string]interface{}) (*Subagen
 	if val, ok := params["label"]; ok {
 		if str, ok := val.(string); ok {
 			result.Label = str
+		}
+	}
+
+	// 解析 task_id
+	if val, ok := params["task_id"]; ok {
+		if str, ok := val.(string); ok {
+			result.TaskID = str
 		}
 	}
 

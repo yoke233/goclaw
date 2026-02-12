@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
+	taskstore "github.com/smallnest/goclaw/agent/tasks"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
@@ -35,6 +36,8 @@ type AgentManager struct {
 	subagentRegistry  *SubagentRegistry
 	subagentAnnouncer *SubagentAnnouncer
 	subagentRuntime   agentruntime.SubagentRuntime
+	mainRuntime       MainRuntime
+	taskStore         taskstore.Store
 	dataDir           string
 	workspace         string
 }
@@ -56,6 +59,8 @@ type NewAgentManagerConfig struct {
 	DataDir         string // 数据目录，用于存储分身注册表
 	Workspace       string
 	SubagentRuntime agentruntime.SubagentRuntime
+	MainRuntime     MainRuntime
+	TaskStore       taskstore.Store
 }
 
 // NewAgentManager 创建 Agent 管理器
@@ -76,6 +81,8 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 		subagentRegistry:  subagentRegistry,
 		subagentAnnouncer: subagentAnnouncer,
 		subagentRuntime:   cfg.SubagentRuntime,
+		mainRuntime:       cfg.MainRuntime,
+		taskStore:         cfg.TaskStore,
 		dataDir:           cfg.DataDir,
 		workspace:         cfg.Workspace,
 	}
@@ -255,6 +262,7 @@ func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) e
 		RequesterOrigin:     requesterOrigin,
 		RequesterDisplayKey: params.RequesterDisplayKey,
 		Task:                params.Task,
+		TaskID:              params.TaskID,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
 		TimeoutSeconds:      params.TimeoutSeconds,
@@ -339,12 +347,49 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 		TimeoutSeconds: timeoutSeconds,
 	}
 
+	if m.taskStore != nil && strings.TrimSpace(record.TaskID) != "" {
+		taskID := strings.TrimSpace(record.TaskID)
+		if err := m.taskStore.LinkSubagentRun(record.RunID, taskID); err != nil {
+			logger.Warn("Failed to link subagent run to task",
+				zap.String("run_id", record.RunID),
+				zap.String("task_id", taskID),
+				zap.Error(err))
+		}
+		if err := m.taskStore.UpdateTaskStatus(taskID, taskstore.StatusDoing); err != nil {
+			logger.Warn("Failed to update task status to doing",
+				zap.String("run_id", record.RunID),
+				zap.String("task_id", taskID),
+				zap.Error(err))
+		}
+		if _, err := m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+			TaskID:  taskID,
+			RunID:   record.RunID,
+			Status:  string(taskstore.StatusDoing),
+			Message: fmt.Sprintf("subagent started (role=%s, timeout=%ds)", role, timeoutSeconds),
+		}); err != nil {
+			logger.Warn("Failed to append task progress for subagent start",
+				zap.String("run_id", record.RunID),
+				zap.String("task_id", taskID),
+				zap.Error(err))
+		}
+	}
+
 	if _, err := m.subagentRuntime.Spawn(context.Background(), runReq); err != nil {
 		endedAt := time.Now().UnixMilli()
 		_ = m.subagentRegistry.MarkCompleted(record.RunID, &SubagentRunOutcome{
 			Status: agentruntime.RunStatusError,
 			Error:  err.Error(),
 		}, &endedAt)
+		if m.taskStore != nil && strings.TrimSpace(record.TaskID) != "" {
+			taskID := strings.TrimSpace(record.TaskID)
+			_ = m.taskStore.UpdateTaskStatus(taskID, taskstore.StatusBlocked)
+			_, _ = m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+				TaskID:  taskID,
+				RunID:   record.RunID,
+				Status:  string(taskstore.StatusBlocked),
+				Message: fmt.Sprintf("subagent failed to start: %v", err),
+			})
+		}
 		return fmt.Errorf("failed to spawn subagent runtime: %w", err)
 	}
 
@@ -387,6 +432,11 @@ func (m *AgentManager) sendToSession(sessionKey, message string) error {
 }
 
 func (m *AgentManager) waitSubagentResult(runID string) {
+	taskID := ""
+	if record, ok := m.subagentRegistry.GetRun(runID); ok {
+		taskID = strings.TrimSpace(record.TaskID)
+	}
+
 	res, err := m.subagentRuntime.Wait(context.Background(), runID)
 	endedAt := time.Now().UnixMilli()
 	outcome := &SubagentRunOutcome{
@@ -409,6 +459,60 @@ func (m *AgentManager) waitSubagentResult(runID string) {
 		logger.Error("Failed to mark subagent run completed",
 			zap.String("run_id", runID),
 			zap.Error(markErr))
+	}
+
+	if m.taskStore == nil {
+		return
+	}
+
+	if taskID == "" {
+		resolvedTaskID, resolveErr := m.taskStore.ResolveTaskByRun(runID)
+		if resolveErr != nil {
+			logger.Warn("Failed to resolve task by run",
+				zap.String("run_id", runID),
+				zap.Error(resolveErr))
+		}
+		taskID = strings.TrimSpace(resolvedTaskID)
+	}
+	if taskID == "" {
+		return
+	}
+
+	nextStatus := taskstore.StatusBlocked
+	switch outcome.Status {
+	case agentruntime.RunStatusOK:
+		nextStatus = taskstore.StatusDone
+	case agentruntime.RunStatusTimeout:
+		nextStatus = taskstore.StatusBlocked
+	case agentruntime.RunStatusError:
+		nextStatus = taskstore.StatusBlocked
+	}
+
+	if err := m.taskStore.UpdateTaskStatus(taskID, nextStatus); err != nil {
+		logger.Warn("Failed to update task status by subagent outcome",
+			zap.String("run_id", runID),
+			zap.String("task_id", taskID),
+			zap.Error(err))
+	}
+
+	progressMsg := strings.TrimSpace(outcome.Result)
+	if progressMsg == "" {
+		progressMsg = strings.TrimSpace(outcome.Error)
+	}
+	if progressMsg == "" {
+		progressMsg = "subagent finished with no output"
+	}
+
+	if _, err := m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+		TaskID:  taskID,
+		RunID:   runID,
+		Status:  outcome.Status,
+		Message: progressMsg,
+	}); err != nil {
+		logger.Warn("Failed to append task progress by subagent outcome",
+			zap.String("run_id", runID),
+			zap.String("task_id", taskID),
+			zap.Error(err))
 	}
 }
 
@@ -625,9 +729,6 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		}
 	}
 
-	// 获取 Agent 的 orchestrator
-	orchestrator := agent.GetOrchestrator()
-
 	// 透传会话上下文，供 sessions_spawn 等工具读取请求来源
 	ctx = context.WithValue(ctx, agentruntime.CtxSessionKey, sessionKey)
 	ctx = context.WithValue(ctx, agentruntime.CtxAgentID, strings.TrimSpace(agentID))
@@ -635,11 +736,59 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	ctx = context.WithValue(ctx, agentruntime.CtxAccountID, strings.TrimSpace(msg.AccountID))
 	ctx = context.WithValue(ctx, agentruntime.CtxChatID, strings.TrimSpace(msg.ChatID))
 
-	// 执行 Agent
-	finalMessages, err := orchestrator.Run(ctx, []AgentMessage{agentMsg})
-	if err != nil {
-		logger.Error("Agent execution failed", zap.Error(err))
-		return err
+	finalMessages := []AgentMessage{}
+	if m.mainRuntime != nil {
+		media := make([]MainRunMedia, 0, len(msg.Media))
+		for _, item := range msg.Media {
+			media = append(media, MainRunMedia{
+				Type:     item.Type,
+				URL:      item.URL,
+				Base64:   item.Base64,
+				MimeType: item.MimeType,
+			})
+		}
+
+		runResp, runErr := m.mainRuntime.Run(ctx, MainRunRequest{
+			AgentID:      strings.TrimSpace(agentID),
+			SessionKey:   sessionKey,
+			Prompt:       msg.Content,
+			SystemPrompt: agent.GetState().SystemPrompt,
+			Workspace:    agent.GetWorkspace(),
+			Media:        media,
+			Metadata: map[string]any{
+				"channel":    msg.Channel,
+				"account_id": msg.AccountID,
+				"chat_id":    msg.ChatID,
+			},
+		})
+		if runErr != nil {
+			logger.Error("Main runtime execution failed", zap.Error(runErr))
+			return runErr
+		}
+
+		output := ""
+		if runResp != nil {
+			output = strings.TrimSpace(runResp.Output)
+		}
+		if output == "" {
+			output = "(no output)"
+		}
+
+		finalMessages = append(finalMessages, agentMsg)
+		finalMessages = append(finalMessages, AgentMessage{
+			Role:      RoleAssistant,
+			Content:   []ContentBlock{TextContent{Text: output}},
+			Timestamp: time.Now().UnixMilli(),
+		})
+	} else {
+		orchestrator := agent.GetOrchestrator()
+		// 执行 Agent（旧链路）
+		runMessages, runErr := orchestrator.Run(ctx, []AgentMessage{agentMsg})
+		if runErr != nil {
+			logger.Error("Agent execution failed", zap.Error(runErr))
+			return runErr
+		}
+		finalMessages = runMessages
 	}
 
 	// 更新会话
@@ -731,14 +880,18 @@ func (m *AgentManager) Start(ctx context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for id, agent := range m.agents {
-		if err := agent.Start(ctx); err != nil {
-			logger.Error("Failed to start agent",
-				zap.String("agent_id", id),
-				zap.Error(err))
-		} else {
-			logger.Info("Agent started", zap.String("agent_id", id))
+	if m.mainRuntime == nil {
+		for id, agent := range m.agents {
+			if err := agent.Start(ctx); err != nil {
+				logger.Error("Failed to start agent",
+					zap.String("agent_id", id),
+					zap.Error(err))
+			} else {
+				logger.Info("Agent started", zap.String("agent_id", id))
+			}
 		}
+	} else {
+		logger.Info("Main runtime enabled; skip starting legacy agent loops")
 	}
 
 	// 启动消息处理器
@@ -752,11 +905,19 @@ func (m *AgentManager) Stop() error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for id, agent := range m.agents {
-		if err := agent.Stop(); err != nil {
-			logger.Error("Failed to stop agent",
-				zap.String("agent_id", id),
-				zap.Error(err))
+	if m.mainRuntime == nil {
+		for id, agent := range m.agents {
+			if err := agent.Stop(); err != nil {
+				logger.Error("Failed to stop agent",
+					zap.String("agent_id", id),
+					zap.Error(err))
+			}
+		}
+	}
+
+	if m.mainRuntime != nil {
+		if err := m.mainRuntime.Close(); err != nil {
+			return err
 		}
 	}
 
