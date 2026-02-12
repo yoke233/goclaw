@@ -82,7 +82,11 @@ func runAgent(cmd *cobra.Command, args []string) {
 	}
 
 	// Create workspace
-	workspace := os.Getenv("HOME") + "/.goclaw/workspace"
+	workspace, err := config.GetWorkspacePath(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to resolve workspace: %v\n", err)
+		os.Exit(1)
+	}
 	if err := os.MkdirAll(workspace, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create workspace: %v\n", err)
 		os.Exit(1)
@@ -93,7 +97,11 @@ func runAgent(cmd *cobra.Command, args []string) {
 	defer messageBus.Close()
 
 	// Create session manager
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	homeDir, err := config.ResolveUserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	sessionDir := filepath.Join(homeDir, ".goclaw", "sessions")
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create session manager: %v\n", err)
@@ -122,6 +130,15 @@ func runAgent(cmd *cobra.Command, args []string) {
 	toolRegistry := agent.NewToolRegistry()
 	contextBuilder := agent.NewContextBuilder(memoryStore, workspace)
 	contextBuilder.SetToolRegistry(toolRegistry)
+
+	// Runtime invalidator (tools call this; mainRuntime is assigned later).
+	var mainRuntime *agent.AgentSDKMainRuntime
+	invalidateRuntime := tools.RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		if mainRuntime == nil {
+			return fmt.Errorf("main runtime is not initialized")
+		}
+		return mainRuntime.Invalidate(strings.TrimSpace(agentID))
+	})
 
 	// Register memory tools
 	if searchMgr != nil {
@@ -195,6 +212,33 @@ func runAgent(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to register use_skill: %v\n", err)
 	}
 
+	// Register skills + MCP management tools (conversation-accessible)
+	skillsRoleDir := "skills"
+	if sub := cfg.Agents.Defaults.Subagents; sub != nil {
+		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
+			skillsRoleDir = strings.TrimSpace(sub.SkillsRoleDir)
+		}
+	}
+	for _, tool := range []tools.Tool{
+		tools.NewSkillsListTool(workspace, skillsRoleDir),
+		tools.NewSkillsGetTool(workspace, skillsRoleDir),
+		tools.NewSkillsPutTool(workspace, skillsRoleDir, invalidateRuntime),
+		tools.NewSkillsDeleteTool(workspace, skillsRoleDir, invalidateRuntime),
+		tools.NewSkillsSetEnabledTool(workspace, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPListTool(workspace),
+		tools.NewMCPPutServerTool(workspace, invalidateRuntime),
+		tools.NewMCPDeleteServerTool(workspace, invalidateRuntime),
+		tools.NewMCPSetEnabledTool(workspace, invalidateRuntime),
+		tools.NewRuntimeReloadTool(invalidateRuntime),
+	} {
+		if tool == nil {
+			continue
+		}
+		if err := toolRegistry.RegisterExisting(tool); err != nil && agentVerbose {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to register tool %s: %v\n", tool.Name(), err)
+		}
+	}
+
 	agentSDKTaskStore, err := tasksdk.NewSQLiteStore(filepath.Join(workspace, "data", "agentsdk_tasks.db"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize agentsdk task store: %v\n", err)
@@ -210,7 +254,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 	defer func() { _ = taskTracker.Close() }()
 
 	// Create main runtime
-	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
+	mainRuntime, err = agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
 		DefaultWorkspace: workspace,

@@ -23,7 +23,7 @@ func Load(configPath string) (*Config, error) {
 		v.SetConfigFile(configPath)
 	} else {
 		// 默认配置文件搜索路径（按优先级）
-		home, err := resolveUserHomeDir()
+		home, err := ResolveUserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get home directory: %w", err)
 		}
@@ -150,7 +150,7 @@ func Get() *Config {
 
 // GetDefaultConfigPath 获取默认配置文件路径
 func GetDefaultConfigPath() (string, error) {
-	home, err := resolveUserHomeDir()
+	home, err := ResolveUserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
@@ -164,14 +164,16 @@ func GetWorkspacePath(cfg *Config) (string, error) {
 		return cfg.Workspace.Path, nil
 	}
 	// 使用默认路径
-	home, err := resolveUserHomeDir()
+	home, err := ResolveUserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 	return filepath.Join(home, ".goclaw", "workspace"), nil
 }
 
-func resolveUserHomeDir() (string, error) {
+// ResolveUserHomeDir returns the best-effort user home directory.
+// On Windows, prefer USERPROFILE or HOMEDRIVE+HOMEPATH to avoid HOME drift.
+func ResolveUserHomeDir() (string, error) {
 	// Prefer explicit Windows profile variables to avoid environment drift.
 	if runtime.GOOS == "windows" {
 		if profile := strings.TrimSpace(os.Getenv("USERPROFILE")); profile != "" {

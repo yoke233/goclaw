@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,8 @@ import (
 	sdktool "github.com/cexll/agentsdk-go/pkg/tool"
 	agenttools "github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal/logger"
+	"go.uber.org/zap"
 )
 
 // AgentSDKMainRuntimeOptions configures the main agentsdk runtime adapter.
@@ -41,6 +44,8 @@ type sdkRuntimeEntry struct {
 	model       string
 	temperature float64
 	maxTokens   int
+	inUse       int
+	invalidated bool
 }
 
 // NewAgentSDKMainRuntime creates a main runtime backed by agentsdk-go.
@@ -66,10 +71,16 @@ func (r *AgentSDKMainRuntime) Run(ctx context.Context, req MainRunRequest) (*Mai
 		return nil, fmt.Errorf("prompt or media is required")
 	}
 
-	runtime, err := r.getOrCreateRuntime(ctx, req)
+	entry, agentID, err := r.getOrCreateRuntimeEntry(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	defer r.releaseRuntime(agentID, entry)
+
+	if entry == nil || entry.runtime == nil {
+		return nil, fmt.Errorf("runtime is not available")
+	}
+	runtime := entry.runtime
 
 	request := sdkapi.Request{
 		Prompt:    req.Prompt,
@@ -107,7 +118,69 @@ func (r *AgentSDKMainRuntime) Close() error {
 	return firstErr
 }
 
-func (r *AgentSDKMainRuntime) getOrCreateRuntime(ctx context.Context, req MainRunRequest) (*sdkapi.Runtime, error) {
+// Invalidate marks the cached runtime for an agent as stale. The runtime will be
+// recreated on the next turn. If the runtime is currently in-use, the actual
+// Close is deferred until the last in-flight request completes.
+func (r *AgentSDKMainRuntime) Invalidate(agentID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.runtimes[agentID]
+	if !ok || entry == nil {
+		return nil
+	}
+	entry.invalidated = true
+	if entry.inUse > 0 {
+		return nil
+	}
+	if entry.runtime != nil {
+		if err := entry.runtime.Close(); err != nil {
+			return err
+		}
+		entry.runtime = nil
+	}
+	delete(r.runtimes, agentID)
+	return nil
+}
+
+func (r *AgentSDKMainRuntime) releaseRuntime(agentID string, entry *sdkRuntimeEntry) {
+	if entry == nil {
+		return
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if entry.inUse > 0 {
+		entry.inUse--
+	}
+
+	if entry.inUse != 0 || !entry.invalidated {
+		return
+	}
+
+	// Safe to close now.
+	if entry.runtime != nil {
+		_ = entry.runtime.Close()
+		entry.runtime = nil
+	}
+
+	// Only delete if the map still points to this entry (it might have been replaced).
+	if current, ok := r.runtimes[agentID]; ok && current == entry {
+		delete(r.runtimes, agentID)
+	}
+}
+
+func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req MainRunRequest) (*sdkRuntimeEntry, string, error) {
 	agentID := strings.TrimSpace(req.AgentID)
 	if agentID == "" {
 		agentID = "default"
@@ -127,23 +200,22 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntime(ctx context.Context, req MainRu
 	maxTokens := r.cfg.Agents.Defaults.MaxTokens
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if existing, ok := r.runtimes[agentID]; ok && existing != nil && existing.runtime != nil {
+	if existing, ok := r.runtimes[agentID]; ok && existing != nil && existing.runtime != nil && !existing.invalidated {
 		if existing.workspace == workspace &&
 			existing.system == systemPrompt &&
 			existing.model == modelName &&
 			existing.temperature == temperature &&
 			existing.maxTokens == maxTokens {
-			return existing.runtime, nil
+			existing.inUse++
+			r.mu.Unlock()
+			return existing, agentID, nil
 		}
-		_ = existing.runtime.Close()
-		delete(r.runtimes, agentID)
 	}
+	r.mu.Unlock()
 
 	modelFactory, err := buildAgentSDKModelFactory(r.cfg, modelName, maxTokens, temperature)
 	if err != nil {
-		return nil, err
+		return nil, agentID, err
 	}
 
 	maxIterations := r.cfg.Agents.Defaults.MaxIterations
@@ -156,6 +228,29 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntime(ctx context.Context, req MainRu
 		runtimeTimeout = time.Duration(sub.TimeoutSeconds) * time.Second
 	}
 
+	// Load workspace extensions (skills + MCP config) at runtime creation time.
+	skillsRoleDir := "skills"
+	if sub := r.cfg.Agents.Defaults.Subagents; sub != nil {
+		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
+			skillsRoleDir = strings.TrimSpace(sub.SkillsRoleDir)
+		}
+	}
+	mainSkillsDir := filepath.Join(workspace, skillsRoleDir, "main")
+	skillRegs, hookRegs, skillWarnings := loadAgentSDKRegistrations(mainSkillsDir)
+	for _, w := range skillWarnings {
+		logger.Warn("Main skills warning",
+			zap.String("agent_id", agentID),
+			zap.String("skills_dir", mainSkillsDir),
+			zap.String("warning", w))
+	}
+	settingsOverrides, mcpWarnings := buildAgentSDKSettingsOverrides(workspace)
+	for _, w := range mcpWarnings {
+		logger.Warn("Main MCP warning",
+			zap.String("agent_id", agentID),
+			zap.String("workspace", workspace),
+			zap.String("warning", w))
+	}
+
 	runtime, err := sdkapi.New(ctx, sdkapi.Options{
 		ProjectRoot:   workspace,
 		ModelFactory:  modelFactory,
@@ -165,20 +260,51 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntime(ctx context.Context, req MainRu
 		Timeout:       runtimeTimeout,
 		TaskStore:     r.taskStore,
 		Tools:         buildAgentSDKTools(r.tools.ListExisting()),
+		Skills:        skillRegs,
+		TypedHooks:    hookRegs,
+		SettingsOverrides: settingsOverrides,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize main agentsdk runtime: %w", err)
+		return nil, agentID, fmt.Errorf("failed to initialize main agentsdk runtime: %w", err)
 	}
 
-	r.runtimes[agentID] = &sdkRuntimeEntry{
+	newEntry := &sdkRuntimeEntry{
 		runtime:     runtime,
 		workspace:   workspace,
 		system:      systemPrompt,
 		model:       modelName,
 		temperature: temperature,
 		maxTokens:   maxTokens,
+		inUse:       1,
 	}
-	return runtime, nil
+
+	r.mu.Lock()
+	// Another goroutine might have created a fresh runtime for this agent while we were initializing.
+	if existing, ok := r.runtimes[agentID]; ok && existing != nil && existing.runtime != nil && !existing.invalidated {
+		if existing.workspace == workspace &&
+			existing.system == systemPrompt &&
+			existing.model == modelName &&
+			existing.temperature == temperature &&
+			existing.maxTokens == maxTokens {
+			existing.inUse++
+			r.mu.Unlock()
+			_ = runtime.Close()
+			return existing, agentID, nil
+		}
+	}
+
+	// Replace existing entry (if any). Old entry is invalidated and will be closed once unused.
+	if old, ok := r.runtimes[agentID]; ok && old != nil {
+		old.invalidated = true
+		if old.inUse == 0 && old.runtime != nil {
+			_ = old.runtime.Close()
+			old.runtime = nil
+		}
+	}
+	r.runtimes[agentID] = newEntry
+	r.mu.Unlock()
+
+	return newEntry, agentID, nil
 }
 
 func buildAgentSDKModelFactory(cfg *config.Config, modelName string, maxTokens int, temperature float64) (sdkapi.ModelFactory, error) {

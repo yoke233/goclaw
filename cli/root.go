@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/smallnest/goclaw/agent"
@@ -173,7 +174,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	defer messageBus.Close()
 
 	// 创建会话管理器
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		logger.Fatal("Failed to get user home directory", zap.Error(err))
 	}
@@ -203,6 +204,15 @@ func runStart(cmd *cobra.Command, args []string) {
 	toolRegistry := agent.NewToolRegistry()
 	contextBuilder.SetToolRegistry(toolRegistry)
 
+	// Runtime invalidator (tools call this; mainRuntime is assigned later).
+	var mainRuntime *agent.AgentSDKMainRuntime
+	invalidateRuntime := tools.RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		if mainRuntime == nil {
+			return fmt.Errorf("main runtime is not initialized")
+		}
+		return mainRuntime.Invalidate(strings.TrimSpace(agentID))
+	})
+
 	// 注册 memory 工具
 	if searchMgr != nil {
 		if err := toolRegistry.RegisterExisting(tools.NewMemoryTool(searchMgr)); err != nil {
@@ -214,8 +224,8 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 
 	// 创建技能加载器（统一使用 ~/.goclaw/skills 目录）
-	goclawDir := os.Getenv("HOME") + "/.goclaw"
-	skillsDir := goclawDir + "/skills"
+	goclawDir := filepath.Join(homeDir, ".goclaw")
+	skillsDir := filepath.Join(goclawDir, "skills")
 	skillsLoader := agent.NewSkillsLoader(goclawDir, []string{skillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		logger.Warn("Failed to discover skills", zap.Error(err))
@@ -237,6 +247,34 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 注册 use_skill 工具（用于两阶段技能加载）
 	if err := toolRegistry.RegisterExisting(tools.NewUseSkillTool()); err != nil {
 		logger.Warn("Failed to register use_skill tool", zap.Error(err))
+	}
+
+	// ========== Skills + MCP 动态管理工具（对话可用）==========
+	skillsRoleDir := "skills"
+	if sub := cfg.Agents.Defaults.Subagents; sub != nil {
+		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
+			skillsRoleDir = strings.TrimSpace(sub.SkillsRoleDir)
+		}
+	}
+
+	for _, tool := range []tools.Tool{
+		tools.NewSkillsListTool(workspaceDir, skillsRoleDir),
+		tools.NewSkillsGetTool(workspaceDir, skillsRoleDir),
+		tools.NewSkillsPutTool(workspaceDir, skillsRoleDir, invalidateRuntime),
+		tools.NewSkillsDeleteTool(workspaceDir, skillsRoleDir, invalidateRuntime),
+		tools.NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPListTool(workspaceDir),
+		tools.NewMCPPutServerTool(workspaceDir, invalidateRuntime),
+		tools.NewMCPDeleteServerTool(workspaceDir, invalidateRuntime),
+		tools.NewMCPSetEnabledTool(workspaceDir, invalidateRuntime),
+		tools.NewRuntimeReloadTool(invalidateRuntime),
+	} {
+		if tool == nil {
+			continue
+		}
+		if err := toolRegistry.RegisterExisting(tool); err != nil {
+			logger.Warn("Failed to register tool", zap.String("tool", tool.Name()), zap.Error(err))
+		}
 	}
 
 	// 注册 Shell 工具
@@ -299,7 +337,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	logger.Info("AgentSDK task store initialized", zap.String("path", agentSDKTaskDBPath))
 
 	// 初始化主执行运行时（agentsdk 主链路）
-	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
+	mainRuntime, err = agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
 		DefaultWorkspace: workspaceDir,
