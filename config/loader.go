@@ -67,6 +67,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agents.defaults.max_iterations", 15)
 	v.SetDefault("agents.defaults.temperature", 0.7)
 	v.SetDefault("agents.defaults.max_tokens", 4096)
+	v.SetDefault("agents.defaults.subagents.runtime", "agentsdk")
+	v.SetDefault("agents.defaults.subagents.max_concurrent", 8)
+	v.SetDefault("agents.defaults.subagents.frontend_max_concurrent", 5)
+	v.SetDefault("agents.defaults.subagents.backend_max_concurrent", 4)
+	v.SetDefault("agents.defaults.subagents.archive_after_minutes", 60)
+	v.SetDefault("agents.defaults.subagents.timeout_seconds", 900)
+	v.SetDefault("agents.defaults.subagents.skills_role_dir", "skills")
+	v.SetDefault("agents.defaults.subagents.workdir_base", "subagents")
 
 	// Gateway 默认配置
 	v.SetDefault("gateway.host", "localhost")

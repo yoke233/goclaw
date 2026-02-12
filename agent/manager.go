@@ -3,9 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	agentruntime "github.com/smallnest/goclaw/agent/runtime"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
@@ -17,9 +21,9 @@ import (
 
 // AgentManager 管理多个 Agent 实例
 type AgentManager struct {
-	agents         map[string]*Agent              // agentID -> Agent
-	bindings       map[string]*BindingEntry       // channel:accountID -> BindingEntry
-	defaultAgent   *Agent                          // 默认 Agent
+	agents         map[string]*Agent        // agentID -> Agent
+	bindings       map[string]*BindingEntry // channel:accountID -> BindingEntry
+	defaultAgent   *Agent                   // 默认 Agent
 	bus            *bus.MessageBus
 	sessionMgr     *session.Manager
 	provider       providers.Provider
@@ -28,9 +32,11 @@ type AgentManager struct {
 	cfg            *config.Config
 	contextBuilder *ContextBuilder
 	// 分身支持
-	subagentRegistry *SubagentRegistry
+	subagentRegistry  *SubagentRegistry
 	subagentAnnouncer *SubagentAnnouncer
-	dataDir         string
+	subagentRuntime   agentruntime.SubagentRuntime
+	dataDir           string
+	workspace         string
 }
 
 // BindingEntry Agent 绑定条目
@@ -43,11 +49,13 @@ type BindingEntry struct {
 
 // NewAgentManagerConfig AgentManager 配置
 type NewAgentManagerConfig struct {
-	Bus        *bus.MessageBus
-	Provider   providers.Provider
-	SessionMgr *session.Manager
-	Tools      *ToolRegistry
-	DataDir    string // 数据目录，用于存储分身注册表
+	Bus             *bus.MessageBus
+	Provider        providers.Provider
+	SessionMgr      *session.Manager
+	Tools           *ToolRegistry
+	DataDir         string // 数据目录，用于存储分身注册表
+	Workspace       string
+	SubagentRuntime agentruntime.SubagentRuntime
 }
 
 // NewAgentManager 创建 Agent 管理器
@@ -59,15 +67,17 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 	subagentAnnouncer := NewSubagentAnnouncer(nil) // 回调在 Start 中设置
 
 	return &AgentManager{
-		agents:           make(map[string]*Agent),
-		bindings:         make(map[string]*BindingEntry),
-		bus:              cfg.Bus,
-		sessionMgr:       cfg.SessionMgr,
-		provider:         cfg.Provider,
-		tools:            cfg.Tools,
-		subagentRegistry: subagentRegistry,
+		agents:            make(map[string]*Agent),
+		bindings:          make(map[string]*BindingEntry),
+		bus:               cfg.Bus,
+		sessionMgr:        cfg.SessionMgr,
+		provider:          cfg.Provider,
+		tools:             cfg.Tools,
+		subagentRegistry:  subagentRegistry,
 		subagentAnnouncer: subagentAnnouncer,
-		dataDir:          cfg.DataDir,
+		subagentRuntime:   cfg.SubagentRuntime,
+		dataDir:           cfg.DataDir,
+		workspace:         cfg.Workspace,
 	}
 }
 
@@ -239,60 +249,214 @@ func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) e
 	}
 
 	return a.registry.RegisterRun(&SubagentRunParams{
-		RunID:                 params.RunID,
-		ChildSessionKey:       params.ChildSessionKey,
-		RequesterSessionKey:   params.RequesterSessionKey,
-		RequesterOrigin:       requesterOrigin,
-		RequesterDisplayKey:   params.RequesterDisplayKey,
-		Task:                  params.Task,
-		Cleanup:               params.Cleanup,
-		Label:                 params.Label,
-		ArchiveAfterMinutes:   params.ArchiveAfterMinutes,
+		RunID:               params.RunID,
+		ChildSessionKey:     params.ChildSessionKey,
+		RequesterSessionKey: params.RequesterSessionKey,
+		RequesterOrigin:     requesterOrigin,
+		RequesterDisplayKey: params.RequesterDisplayKey,
+		Task:                params.Task,
+		Cleanup:             params.Cleanup,
+		Label:               params.Label,
+		TimeoutSeconds:      params.TimeoutSeconds,
+		ArchiveAfterMinutes: params.ArchiveAfterMinutes,
 	})
 }
 
 // handleSubagentSpawn 处理分身生成
 func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) error {
-	// 解析子会话密钥
-	_, subagentID, isSubagent := ParseAgentSessionKey(result.ChildSessionKey)
-	if !isSubagent {
-		return fmt.Errorf("invalid subagent session key: %s", result.ChildSessionKey)
+	if m.subagentRuntime == nil {
+		return fmt.Errorf("subagent runtime is not configured")
 	}
 
-	// TODO: 启动分身运行
-	// 这里需要创建新的 Agent 实例来运行分身任务
-	logger.Info("Subagent spawn handled",
+	record, ok := m.subagentRegistry.GetRun(result.RunID)
+	if !ok {
+		return fmt.Errorf("subagent run not found: %s", result.RunID)
+	}
+
+	role := agentruntime.ParseRole(record.Task, record.Label)
+	subCfg := m.getSubagentsConfig()
+
+	workdirBase := "subagents"
+	skillsRoleDir := "skills"
+	timeoutSeconds := 900
+	if subCfg != nil {
+		if strings.TrimSpace(subCfg.WorkdirBase) != "" {
+			workdirBase = strings.TrimSpace(subCfg.WorkdirBase)
+		}
+		if strings.TrimSpace(subCfg.SkillsRoleDir) != "" {
+			skillsRoleDir = strings.TrimSpace(subCfg.SkillsRoleDir)
+		}
+		if subCfg.TimeoutSeconds > 0 {
+			timeoutSeconds = subCfg.TimeoutSeconds
+		}
+	}
+	if record.TimeoutSeconds > 0 {
+		timeoutSeconds = record.TimeoutSeconds
+	}
+
+	workspaceRoot := m.getWorkspaceRoot()
+	runRoot := filepath.Join(workspaceRoot, workdirBase, record.RunID)
+	workdir := filepath.Join(runRoot, "workspace")
+	skillsDir := filepath.Join(workspaceRoot, skillsRoleDir, role)
+
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		return fmt.Errorf("failed to create subagent workdir: %w", err)
+	}
+	if _, err := os.Stat(skillsDir); err != nil {
+		if os.IsNotExist(err) {
+			logger.Warn("Subagent skills directory does not exist; creating empty directory",
+				zap.String("run_id", result.RunID),
+				zap.String("skills_dir", skillsDir))
+			if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
+				logger.Warn("Failed to create subagent skills directory",
+					zap.String("run_id", result.RunID),
+					zap.String("skills_dir", skillsDir),
+					zap.Error(mkErr))
+			}
+		} else {
+			logger.Warn("Failed to stat subagent skills directory",
+				zap.String("run_id", result.RunID),
+				zap.String("skills_dir", skillsDir),
+				zap.Error(err))
+		}
+	}
+
+	systemPrompt := BuildSubagentSystemPrompt(&SubagentSystemPromptParams{
+		RequesterSessionKey: record.RequesterSessionKey,
+		RequesterOrigin:     record.RequesterOrigin,
+		ChildSessionKey:     record.ChildSessionKey,
+		Label:               record.Label,
+		Task:                record.Task,
+	})
+
+	runReq := agentruntime.SubagentRunRequest{
+		RunID:          record.RunID,
+		Task:           record.Task,
+		Role:           role,
+		WorkDir:        workdir,
+		SkillsDir:      skillsDir,
+		SystemPrompt:   systemPrompt,
+		TimeoutSeconds: timeoutSeconds,
+	}
+
+	if _, err := m.subagentRuntime.Spawn(context.Background(), runReq); err != nil {
+		endedAt := time.Now().UnixMilli()
+		_ = m.subagentRegistry.MarkCompleted(record.RunID, &SubagentRunOutcome{
+			Status: agentruntime.RunStatusError,
+			Error:  err.Error(),
+		}, &endedAt)
+		return fmt.Errorf("failed to spawn subagent runtime: %w", err)
+	}
+
+	go m.waitSubagentResult(record.RunID)
+
+	logger.Info("Subagent runtime started",
 		zap.String("run_id", result.RunID),
-		zap.String("subagent_id", subagentID),
-		zap.String("child_session_key", result.ChildSessionKey))
+		zap.String("role", role),
+		zap.String("workdir", workdir),
+		zap.String("skills_dir", skillsDir))
 
 	return nil
 }
 
 // sendToSession 发送消息到指定会话
 func (m *AgentManager) sendToSession(sessionKey, message string) error {
-	// 解析会话密钥获取 agent ID
-	agentID, _, _ := ParseAgentSessionKey(sessionKey)
-
-	// 获取对应的 Agent
-	agent, ok := m.GetAgent(agentID)
-	if !ok {
-		// 尝试使用默认 Agent
-		agent = m.defaultAgent
+	channel, accountID, chatID := parseRequesterSessionKey(sessionKey)
+	if channel == "" {
+		channel = "cli"
+	}
+	if accountID == "" {
+		accountID = "default"
+	}
+	if chatID == "" {
+		chatID = "default"
+	}
+	inbound := &bus.InboundMessage{
+		Channel:   channel,
+		AccountID: accountID,
+		ChatID:    chatID,
+		Content:   message,
+		Metadata: map[string]interface{}{
+			"source":                "subagent_announce",
+			"requester_session_key": sessionKey,
+		},
+		Timestamp: time.Now(),
 	}
 
-	if agent == nil {
-		return fmt.Errorf("no agent found for session: %s", sessionKey)
+	return m.RouteInbound(context.Background(), inbound)
+}
+
+func (m *AgentManager) waitSubagentResult(runID string) {
+	res, err := m.subagentRuntime.Wait(context.Background(), runID)
+	endedAt := time.Now().UnixMilli()
+	outcome := &SubagentRunOutcome{
+		Status: agentruntime.RunStatusError,
 	}
 
-	// TODO: 实现将消息发送到 Agent 的逻辑
-	// 这可能需要将消息注入到 Agent 的消息队列中
+	if err != nil {
+		outcome.Error = err.Error()
+	} else if res == nil {
+		outcome.Error = "subagent runtime returned nil result"
+	} else {
+		outcome.Status = normalizeRuntimeStatus(res.Status)
+		outcome.Result = strings.TrimSpace(res.Output)
+		if strings.TrimSpace(res.ErrorMsg) != "" {
+			outcome.Error = strings.TrimSpace(res.ErrorMsg)
+		}
+	}
 
-	logger.Info("Message sent to session",
-		zap.String("session_key", sessionKey),
-		zap.Int("message_length", len(message)))
+	if markErr := m.subagentRegistry.MarkCompleted(runID, outcome, &endedAt); markErr != nil {
+		logger.Error("Failed to mark subagent run completed",
+			zap.String("run_id", runID),
+			zap.Error(markErr))
+	}
+}
 
-	return nil
+func normalizeRuntimeStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case agentruntime.RunStatusOK:
+		return agentruntime.RunStatusOK
+	case agentruntime.RunStatusTimeout:
+		return agentruntime.RunStatusTimeout
+	case agentruntime.RunStatusError:
+		return agentruntime.RunStatusError
+	default:
+		return agentruntime.RunStatusError
+	}
+}
+
+func parseRequesterSessionKey(sessionKey string) (channel string, accountID string, chatID string) {
+	parts := strings.Split(sessionKey, ":")
+	switch {
+	case len(parts) >= 3:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(strings.Join(parts[2:], ":"))
+	case len(parts) == 2:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "default"
+	case len(parts) == 1 && strings.TrimSpace(parts[0]) != "":
+		return "cli", "default", strings.TrimSpace(parts[0])
+	default:
+		return "cli", "default", "default"
+	}
+}
+
+func (m *AgentManager) getWorkspaceRoot() string {
+	if strings.TrimSpace(m.workspace) != "" {
+		return strings.TrimSpace(m.workspace)
+	}
+	if m.cfg != nil && strings.TrimSpace(m.cfg.Workspace.Path) != "" {
+		return strings.TrimSpace(m.cfg.Workspace.Path)
+	}
+	if strings.TrimSpace(m.dataDir) != "" {
+		return strings.TrimSpace(m.dataDir)
+	}
+	return "."
+}
+
+func (m *AgentManager) getSubagentsConfig() *config.SubagentsConfig {
+	if m.cfg == nil {
+		return nil
+	}
+	return m.cfg.Agents.Defaults.Subagents
 }
 
 // createAgent 创建 Agent 实例
@@ -381,7 +545,6 @@ func (m *AgentManager) setupBinding(binding config.BindingConfig) error {
 // RouteInbound 路由入站消息到对应的 Agent
 func (m *AgentManager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) error {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 
 	// 构建绑定键
 	bindingKey := fmt.Sprintf("%s:%s", msg.Channel, msg.AccountID)
@@ -389,27 +552,41 @@ func (m *AgentManager) RouteInbound(ctx context.Context, msg *bus.InboundMessage
 	// 查找绑定的 Agent
 	entry, ok := m.bindings[bindingKey]
 	var agent *Agent
+	agentID := ""
 	if ok {
 		agent = entry.Agent
+		agentID = entry.AgentID
 		logger.Debug("Message routed by binding",
 			zap.String("binding_key", bindingKey),
 			zap.String("agent_id", entry.AgentID))
 	} else if m.defaultAgent != nil {
 		// 使用默认 Agent
 		agent = m.defaultAgent
+		for id, a := range m.agents {
+			if a == agent {
+				agentID = id
+				break
+			}
+		}
+		if agentID == "" {
+			agentID = "default"
+		}
 		logger.Debug("Message routed to default agent",
 			zap.String("channel", msg.Channel),
-			zap.String("account_id", msg.AccountID))
+			zap.String("account_id", msg.AccountID),
+			zap.String("agent_id", agentID))
 	} else {
+		m.mu.RUnlock()
 		return fmt.Errorf("no agent found for message: %s", bindingKey)
 	}
+	m.mu.RUnlock()
 
 	// 处理消息
-	return m.handleInboundMessage(ctx, msg, agent)
+	return m.handleInboundMessage(ctx, msg, agent, agentID)
 }
 
 // handleInboundMessage 处理入站消息
-func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.InboundMessage, agent *Agent) error {
+func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.InboundMessage, agent *Agent, agentID string) error {
 	// 调用 Agent 处理消息（内部逻辑和 agent.go 中的 handleInboundMessage 类似）
 	logger.Info("Processing inbound message",
 		zap.String("channel", msg.Channel),
@@ -450,6 +627,13 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 
 	// 获取 Agent 的 orchestrator
 	orchestrator := agent.GetOrchestrator()
+
+	// 透传会话上下文，供 sessions_spawn 等工具读取请求来源
+	ctx = context.WithValue(ctx, agentruntime.CtxSessionKey, sessionKey)
+	ctx = context.WithValue(ctx, agentruntime.CtxAgentID, strings.TrimSpace(agentID))
+	ctx = context.WithValue(ctx, agentruntime.CtxChannel, strings.TrimSpace(msg.Channel))
+	ctx = context.WithValue(ctx, agentruntime.CtxAccountID, strings.TrimSpace(msg.AccountID))
+	ctx = context.WithValue(ctx, agentruntime.CtxChatID, strings.TrimSpace(msg.ChatID))
 
 	// 执行 Agent
 	finalMessages, err := orchestrator.Run(ctx, []AgentMessage{agentMsg})
@@ -626,7 +810,7 @@ func (m *AgentManager) GetToolsInfo() (map[string]interface{}, error) {
 		result[tool.Name()] = map[string]interface{}{
 			"name":        tool.Name(),
 			"description": tool.Description(),
-			"parameters": tool.Parameters(),
+			"parameters":  tool.Parameters(),
 		}
 	}
 

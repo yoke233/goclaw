@@ -15,9 +15,9 @@ type Config struct {
 	Approvals ApprovalsConfig `mapstructure:"approvals" json:"approvals"`
 	Memory    MemoryConfig    `mapstructure:"memory" json:"memory"`
 	// Skills configuration (map[string]interface{} to be parsed by skills package)
-	Skills   map[string]interface{} `mapstructure:"skills" json:"skills"`
+	Skills map[string]interface{} `mapstructure:"skills" json:"skills"`
 	// Agent 绑定配置
-	Bindings []BindingConfig        `mapstructure:"bindings" json:"bindings"`
+	Bindings []BindingConfig `mapstructure:"bindings" json:"bindings"`
 }
 
 // WorkspaceConfig Workspace 配置
@@ -33,43 +33,48 @@ type AgentsConfig struct {
 
 // AgentDefaults Agent 默认配置
 type AgentDefaults struct {
-	Model         string  `mapstructure:"model" json:"model"`
-	MaxIterations int     `mapstructure:"max_iterations" json:"max_iterations"`
-	Temperature   float64 `mapstructure:"temperature" json:"temperature"`
-	MaxTokens     int     `mapstructure:"max_tokens" json:"max_tokens"`
+	Model         string           `mapstructure:"model" json:"model"`
+	MaxIterations int              `mapstructure:"max_iterations" json:"max_iterations"`
+	Temperature   float64          `mapstructure:"temperature" json:"temperature"`
+	MaxTokens     int              `mapstructure:"max_tokens" json:"max_tokens"`
 	Subagents     *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
 }
 
 // SubagentsConfig 分身配置
 type SubagentsConfig struct {
-	MaxConcurrent    int    `mapstructure:"max_concurrent" json:"max_concurrent"`
-	ArchiveAfterMinutes int `mapstructure:"archive_after_minutes" json:"archive_after_minutes"`
-	Model            string `mapstructure:"model" json:"model"`
-	Thinking         string `mapstructure:"thinking" json:"thinking"`
-	TimeoutSeconds   int    `mapstructure:"timeout_seconds" json:"timeout_seconds"`
+	Runtime               string `mapstructure:"runtime" json:"runtime"` // goclaw|agentsdk
+	MaxConcurrent         int    `mapstructure:"max_concurrent" json:"max_concurrent"`
+	FrontendMaxConcurrent int    `mapstructure:"frontend_max_concurrent" json:"frontend_max_concurrent"`
+	BackendMaxConcurrent  int    `mapstructure:"backend_max_concurrent" json:"backend_max_concurrent"`
+	ArchiveAfterMinutes   int    `mapstructure:"archive_after_minutes" json:"archive_after_minutes"`
+	Model                 string `mapstructure:"model" json:"model"`
+	Thinking              string `mapstructure:"thinking" json:"thinking"`
+	TimeoutSeconds        int    `mapstructure:"timeout_seconds" json:"timeout_seconds"`
+	SkillsRoleDir         string `mapstructure:"skills_role_dir" json:"skills_role_dir"`
+	WorkdirBase           string `mapstructure:"workdir_base" json:"workdir_base"`
 }
 
 // AgentSubagentConfig 单 Agent 分身配置
 type AgentSubagentConfig struct {
-	AllowAgents    []string            `mapstructure:"allow_agents" json:"allow_agents"` // 允许跨 Agent 创建
-	Model          string              `mapstructure:"model" json:"model"`
-	Thinking       string              `mapstructure:"thinking" json:"thinking"`
-	TimeoutSeconds int                 `mapstructure:"timeout_seconds" json:"timeout_seconds"`
-	DenyTools      []string            `mapstructure:"deny_tools" json:"deny_tools"`
-	AllowTools     []string            `mapstructure:"allow_tools" json:"allow_tools"`
+	AllowAgents    []string `mapstructure:"allow_agents" json:"allow_agents"` // 允许跨 Agent 创建
+	Model          string   `mapstructure:"model" json:"model"`
+	Thinking       string   `mapstructure:"thinking" json:"thinking"`
+	TimeoutSeconds int      `mapstructure:"timeout_seconds" json:"timeout_seconds"`
+	DenyTools      []string `mapstructure:"deny_tools" json:"deny_tools"`
+	AllowTools     []string `mapstructure:"allow_tools" json:"allow_tools"`
 }
 
 // AgentConfig Agent 配置
 type AgentConfig struct {
-	ID          string                 `mapstructure:"id" json:"id"`               // Agent 唯一ID
-	Name        string                 `mapstructure:"name" json:"name"`           // Agent 显示名称
-	Default     bool                   `mapstructure:"default" json:"default"`     // 是否为默认Agent
-	Model       string                 `mapstructure:"model" json:"model"`         // 使用的模型
-	Workspace   string                 `mapstructure:"workspace" json:"workspace"` // 独立工作区路径
-	Identity    *AgentIdentity         `mapstructure:"identity" json:"identity"`   // Agent 身份配置
-	SystemPrompt string                `mapstructure:"system_prompt" json:"system_prompt"` // 系统提示词
-	Metadata    map[string]interface{} `mapstructure:"metadata" json:"metadata"`   // 额外元数据
-	Subagents   *AgentSubagentConfig   `mapstructure:"subagents" json:"subagents"` // 分身配置
+	ID           string                 `mapstructure:"id" json:"id"`                       // Agent 唯一ID
+	Name         string                 `mapstructure:"name" json:"name"`                   // Agent 显示名称
+	Default      bool                   `mapstructure:"default" json:"default"`             // 是否为默认Agent
+	Model        string                 `mapstructure:"model" json:"model"`                 // 使用的模型
+	Workspace    string                 `mapstructure:"workspace" json:"workspace"`         // 独立工作区路径
+	Identity     *AgentIdentity         `mapstructure:"identity" json:"identity"`           // Agent 身份配置
+	SystemPrompt string                 `mapstructure:"system_prompt" json:"system_prompt"` // 系统提示词
+	Metadata     map[string]interface{} `mapstructure:"metadata" json:"metadata"`           // 额外元数据
+	Subagents    *AgentSubagentConfig   `mapstructure:"subagents" json:"subagents"`         // 分身配置
 }
 
 // AgentIdentity Agent 身份配置
@@ -86,7 +91,7 @@ type BindingConfig struct {
 
 // BindingMatch 绑定匹配规则
 type BindingMatch struct {
-	Channel  string `mapstructure:"channel" json:"channel"`     // 通道类型
+	Channel   string `mapstructure:"channel" json:"channel"`       // 通道类型
 	AccountID string `mapstructure:"account_id" json:"account_id"` // 账号ID
 }
 
@@ -102,22 +107,22 @@ type ChannelsConfig struct {
 
 // ChannelAccountConfig 通道账号配置（支持多账号）
 type ChannelAccountConfig struct {
-	Enabled    bool     `mapstructure:"enabled" json:"enabled"`
-	Name       string   `mapstructure:"name" json:"name"`       // 账号显示名称
-	Token      string   `mapstructure:"token" json:"token"`     // Telegram token
-	AppID      string   `mapstructure:"app_id" json:"app_id"`   // QQ/Feishu/WeWork app_id
-	AppSecret  string   `mapstructure:"app_secret" json:"app_secret"` // QQ/Feishu app_secret
-	CorpID     string   `mapstructure:"corp_id" json:"corp_id"` // 企业微信 corp_id
-	AgentID    string   `mapstructure:"agent_id" json:"agent_id"` // 企业微信 agent_id
-	ClientID   string   `mapstructure:"client_id" json:"client_id"` // 钉钉 client_id
-	ClientSecret string `mapstructure:"client_secret" json:"client_secret"` // 钉钉 client_secret
-	BridgeURL  string   `mapstructure:"bridge_url" json:"bridge_url"` // WhatsApp bridge url
-	AllowedIDs []string `mapstructure:"allowed_ids" json:"allowed_ids"`
+	Enabled      bool     `mapstructure:"enabled" json:"enabled"`
+	Name         string   `mapstructure:"name" json:"name"`                   // 账号显示名称
+	Token        string   `mapstructure:"token" json:"token"`                 // Telegram token
+	AppID        string   `mapstructure:"app_id" json:"app_id"`               // QQ/Feishu/WeWork app_id
+	AppSecret    string   `mapstructure:"app_secret" json:"app_secret"`       // QQ/Feishu app_secret
+	CorpID       string   `mapstructure:"corp_id" json:"corp_id"`             // 企业微信 corp_id
+	AgentID      string   `mapstructure:"agent_id" json:"agent_id"`           // 企业微信 agent_id
+	ClientID     string   `mapstructure:"client_id" json:"client_id"`         // 钉钉 client_id
+	ClientSecret string   `mapstructure:"client_secret" json:"client_secret"` // 钉钉 client_secret
+	BridgeURL    string   `mapstructure:"bridge_url" json:"bridge_url"`       // WhatsApp bridge url
+	AllowedIDs   []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 }
 
 // ChannelTypeAccountConfig 通道类型的多账号配置
 type ChannelTypeAccountConfig struct {
-	Enabled  bool                        `mapstructure:"enabled" json:"enabled"`
+	Enabled  bool                            `mapstructure:"enabled" json:"enabled"`
 	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
@@ -127,7 +132,7 @@ type TelegramChannelConfig struct {
 	Token      string   `mapstructure:"token" json:"token"`
 	AllowedIDs []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // WhatsAppChannelConfig WhatsApp 通道配置
@@ -136,7 +141,7 @@ type WhatsAppChannelConfig struct {
 	BridgeURL  string   `mapstructure:"bridge_url" json:"bridge_url"`
 	AllowedIDs []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // FeishuChannelConfig 飞书通道配置
@@ -149,7 +154,7 @@ type FeishuChannelConfig struct {
 	WebhookPort       int      `mapstructure:"webhook_port" json:"webhook_port"`
 	AllowedIDs        []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // QQChannelConfig QQ 通道配置 (QQ 开放平台官方 Bot API)
@@ -159,7 +164,7 @@ type QQChannelConfig struct {
 	AppSecret  string   `mapstructure:"app_secret" json:"app_secret"`   // AppSecret (ClientSecret)
 	AllowedIDs []string `mapstructure:"allowed_ids" json:"allowed_ids"` // 允许的用户/群ID列表
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // WeWorkChannelConfig 企业微信通道配置
@@ -173,17 +178,17 @@ type WeWorkChannelConfig struct {
 	WebhookPort    int      `mapstructure:"webhook_port" json:"webhook_port"`
 	AllowedIDs     []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // DingTalkChannelConfig 钉钉通道配置
 type DingTalkChannelConfig struct {
-	Enabled    bool     `mapstructure:"enabled" json:"enabled"`
-	ClientID   string   `mapstructure:"client_id" json:"client_id"`
-	ClientSecret string `mapstructure:"secret" json:"secret"`
-	AllowedIDs []string `mapstructure:"allowed_ids" json:"allowed_ids"`
+	Enabled      bool     `mapstructure:"enabled" json:"enabled"`
+	ClientID     string   `mapstructure:"client_id" json:"client_id"`
+	ClientSecret string   `mapstructure:"secret" json:"secret"`
+	AllowedIDs   []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）
-	Accounts   map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
+	Accounts map[string]ChannelAccountConfig `mapstructure:"accounts" json:"accounts"`
 }
 
 // ProvidersConfig LLM 提供商配置
@@ -318,27 +323,27 @@ type ApprovalsConfig struct {
 
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
-	Backend string             `mapstructure:"backend" json:"backend"` // "builtin" | "qmd"
+	Backend string              `mapstructure:"backend" json:"backend"` // "builtin" | "qmd"
 	Builtin BuiltinMemoryConfig `mapstructure:"builtin" json:"builtin"`
 	QMD     QMDConfig           `mapstructure:"qmd" json:"qmd"`
 }
 
 // BuiltinMemoryConfig 内置 SQLite 记忆配置
 type BuiltinMemoryConfig struct {
-	Enabled     bool   `mapstructure:"enabled" json:"enabled"`
+	Enabled      bool   `mapstructure:"enabled" json:"enabled"`
 	DatabasePath string `mapstructure:"database_path" json:"database_path"`
-	AutoIndex   bool   `mapstructure:"auto_index" json:"auto_index"`
+	AutoIndex    bool   `mapstructure:"auto_index" json:"auto_index"`
 }
 
 // QMDConfig QMD 记忆配置
 type QMDConfig struct {
-	Command        string   `mapstructure:"command" json:"command"`        // "qmd"
-	Enabled        bool     `mapstructure:"enabled" json:"enabled"`        // 默认 false（需显式启用）
-	IncludeDefault bool     `mapstructure:"include_default" json:"include_default"` // 是否索引默认记忆文件
-	Paths          []QMDPath `mapstructure:"paths" json:"paths"`          // 额外索引路径
-	Sessions       QMDSessions `mapstructure:"sessions" json:"sessions"`  // 会话索引配置
-	Update         QMDUpdate   `mapstructure:"update" json:"update"`      // 更新配置
-	Limits         QMDLimits   `mapstructure:"limits" json:"limits"`      // 搜索限制
+	Command        string      `mapstructure:"command" json:"command"`                 // "qmd"
+	Enabled        bool        `mapstructure:"enabled" json:"enabled"`                 // 默认 false（需显式启用）
+	IncludeDefault bool        `mapstructure:"include_default" json:"include_default"` // 是否索引默认记忆文件
+	Paths          []QMDPath   `mapstructure:"paths" json:"paths"`                     // 额外索引路径
+	Sessions       QMDSessions `mapstructure:"sessions" json:"sessions"`               // 会话索引配置
+	Update         QMDUpdate   `mapstructure:"update" json:"update"`                   // 更新配置
+	Limits         QMDLimits   `mapstructure:"limits" json:"limits"`                   // 搜索限制
 }
 
 // QMDPath QMD 索引路径配置
@@ -350,24 +355,23 @@ type QMDPath struct {
 
 // QMDSessions QMD 会话索引配置
 type QMDSessions struct {
-	Enabled       bool `mapstructure:"enabled" json:"enabled"`
+	Enabled       bool   `mapstructure:"enabled" json:"enabled"`
 	ExportDir     string `mapstructure:"export_dir" json:"export_dir"`
-	RetentionDays int  `mapstructure:"retention_days" json:"retention_days"` // 默认 30
+	RetentionDays int    `mapstructure:"retention_days" json:"retention_days"` // 默认 30
 }
 
 // QMDUpdate QMD 更新配置
 type QMDUpdate struct {
-	Interval        time.Duration `mapstructure:"interval" json:"interval"`          // 默认 5m
-	OnBoot          bool          `mapstructure:"on_boot" json:"on_boot"`            // 默认 true
-	EmbedInterval   time.Duration `mapstructure:"embed_interval" json:"embed_interval"` // 默认 60m
-	CommandTimeout  time.Duration `mapstructure:"command_timeout" json:"command_timeout"` // 默认 30s
-	UpdateTimeout   time.Duration `mapstructure:"update_timeout" json:"update_timeout"`   // 默认 120s
+	Interval       time.Duration `mapstructure:"interval" json:"interval"`               // 默认 5m
+	OnBoot         bool          `mapstructure:"on_boot" json:"on_boot"`                 // 默认 true
+	EmbedInterval  time.Duration `mapstructure:"embed_interval" json:"embed_interval"`   // 默认 60m
+	CommandTimeout time.Duration `mapstructure:"command_timeout" json:"command_timeout"` // 默认 30s
+	UpdateTimeout  time.Duration `mapstructure:"update_timeout" json:"update_timeout"`   // 默认 120s
 }
 
 // QMDLimits QMD 搜索限制配置
 type QMDLimits struct {
-	MaxResults     int `mapstructure:"max_results" json:"max_results"`         // 默认 6
+	MaxResults      int `mapstructure:"max_results" json:"max_results"`             // 默认 6
 	MaxSnippetChars int `mapstructure:"max_snippet_chars" json:"max_snippet_chars"` // 默认 700
-	TimeoutMs      int `mapstructure:"timeout_ms" json:"timeout_ms"`          // 默认 4000
+	TimeoutMs       int `mapstructure:"timeout_ms" json:"timeout_ms"`               // 默认 4000
 }
-

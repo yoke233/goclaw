@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/smallnest/goclaw/internal/logger"
@@ -83,6 +84,11 @@ func (a *SubagentAnnouncer) RunAnnounceFlow(params *SubagentAnnounceParams) erro
 	statsLine := a.buildStatsLine(params)
 
 	// 构建宣告消息
+	findings := params.Task
+	if params.Outcome != nil && strings.TrimSpace(params.Outcome.Result) != "" {
+		findings = params.Outcome.Result
+	}
+
 	triggerMessage := fmt.Sprintf(`A %s "%s" just %s.
 
 Findings:
@@ -93,7 +99,7 @@ Findings:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.
 Do not mention technical details like tokens, stats, or that this was a %s.
 You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).`,
-		announceType, taskLabel, statusLabel, params.Task, statsLine, announceType)
+		announceType, taskLabel, statusLabel, findings, statsLine, announceType)
 
 	// 发送宣告到主 Agent
 	if err := a.onAnnounce(params.RequesterSessionKey, triggerMessage); err != nil {
@@ -253,18 +259,18 @@ func normalizeText(s string) string {
 
 // DefaultToolDenyList 默认拒绝的工具列表
 var DefaultToolDenyList = []string{
-	"sessions_spawn",      // 防止嵌套创建
-	"sessions_list",       // 会话管理 - 主 Agent 协调
+	"sessions_spawn", // 防止嵌套创建
+	"sessions_list",  // 会话管理 - 主 Agent 协调
 	"sessions_history",
 	"sessions_delete",
-	"gateway",             // 系统管理 - 分身不应操作
-	"cron",                // 定时任务
+	"gateway", // 系统管理 - 分身不应操作
+	"cron",    // 定时任务
 }
 
 // ResolveToolPolicy 解析工具策略
 func ResolveToolPolicy(denyTools []string, allowTools []string) *ToolPolicy {
 	policy := &ToolPolicy{
-		Deny: make(map[string]bool),
+		Deny:  make(map[string]bool),
 		Allow: make(map[string]bool),
 	}
 
@@ -343,7 +349,7 @@ func WaitForSubagentCompletion(runID string, timeoutSeconds int, waitFunc func(s
 
 // SubagentCompletion 分身完成结果
 type SubagentCompletion struct {
-	Status    string  // ok, error, timeout
+	Status    string // ok, error, timeout
 	StartedAt int64
 	EndedAt   int64
 	Error     string

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/smallnest/goclaw/agent"
+	agentruntime "github.com/smallnest/goclaw/agent/runtime"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/channels"
@@ -287,13 +289,52 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 创建调度器
 	scheduler := cron.NewScheduler(messageBus, provider, sessionMgr)
 
+	// 初始化分身运行时
+	subagentCfg := cfg.Agents.Defaults.Subagents
+	roleLimits := map[string]int{
+		agentruntime.RoleFrontend: 5,
+		agentruntime.RoleBackend:  4,
+	}
+	defaultMaxConcurrent := 8
+	if subagentCfg != nil {
+		if subagentCfg.MaxConcurrent > 0 {
+			defaultMaxConcurrent = subagentCfg.MaxConcurrent
+		}
+		if subagentCfg.FrontendMaxConcurrent > 0 {
+			roleLimits[agentruntime.RoleFrontend] = subagentCfg.FrontendMaxConcurrent
+		}
+		if subagentCfg.BackendMaxConcurrent > 0 {
+			roleLimits[agentruntime.RoleBackend] = subagentCfg.BackendMaxConcurrent
+		}
+	}
+	rolePool := agentruntime.NewSimpleRolePool(defaultMaxConcurrent, roleLimits)
+
+	subagentModel := "claude-sonnet-4-5"
+	maxTokens := cfg.Agents.Defaults.MaxTokens
+	temperature := cfg.Agents.Defaults.Temperature
+	if subagentCfg != nil && strings.TrimSpace(subagentCfg.Model) != "" {
+		subagentModel = strings.TrimSpace(subagentCfg.Model)
+	}
+	subagentRuntime := agentruntime.NewAgentsdkRuntime(agentruntime.AgentsdkRuntimeOptions{
+		Pool:             rolePool,
+		AnthropicAPIKey:  strings.TrimSpace(cfg.Providers.Anthropic.APIKey),
+		AnthropicBaseURL: strings.TrimSpace(cfg.Providers.Anthropic.BaseURL),
+		ModelName:        subagentModel,
+		MaxTokens:        maxTokens,
+		Temperature:      temperature,
+		MaxIterations:    cfg.Agents.Defaults.MaxIterations,
+		FallbackProvider: provider,
+	})
+
 	// 创建 AgentManager
 	agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
-		Bus:        messageBus,
-		Provider:   provider,
-		SessionMgr: sessionMgr,
-		Tools:      toolRegistry,
-		DataDir:    workspaceDir, // 使用 workspace 作为数据目录
+		Bus:             messageBus,
+		Provider:        provider,
+		SessionMgr:      sessionMgr,
+		Tools:           toolRegistry,
+		DataDir:         workspaceDir, // 使用 workspace 作为数据目录
+		Workspace:       workspaceDir,
+		SubagentRuntime: subagentRuntime,
 	})
 
 	// 从配置设置 Agent 和绑定

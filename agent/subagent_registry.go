@@ -18,6 +18,7 @@ import (
 type SubagentRunOutcome struct {
 	Status string `json:"status"` // ok, error, timeout, unknown
 	Error  string `json:"error,omitempty"`
+	Result string `json:"result,omitempty"`
 }
 
 // DeliveryContext 传递上下文
@@ -30,21 +31,22 @@ type DeliveryContext struct {
 
 // SubagentRunRecord 分身运行记录
 type SubagentRunRecord struct {
-	RunID                 string            `json:"run_id"`
-	ChildSessionKey       string            `json:"child_session_key"`
-	RequesterSessionKey   string            `json:"requester_session_key"`
-	RequesterOrigin       *DeliveryContext  `json:"requester_origin,omitempty"`
-	RequesterDisplayKey   string            `json:"requester_display_key"`
-	Task                  string            `json:"task"`
-	Cleanup               string            `json:"cleanup"` // delete, keep
-	Label                 string            `json:"label,omitempty"`
-	CreatedAt             int64             `json:"created_at"`
-	StartedAt             *int64            `json:"started_at,omitempty"`
-	EndedAt               *int64            `json:"ended_at,omitempty"`
-	Outcome               *SubagentRunOutcome `json:"outcome,omitempty"`
-	ArchiveAtMs           *int64            `json:"archive_at_ms,omitempty"`
-	CleanupCompletedAt    *int64            `json:"cleanup_completed_at,omitempty"`
-	CleanupHandled        bool              `json:"cleanup_handled"`
+	RunID               string              `json:"run_id"`
+	ChildSessionKey     string              `json:"child_session_key"`
+	RequesterSessionKey string              `json:"requester_session_key"`
+	RequesterOrigin     *DeliveryContext    `json:"requester_origin,omitempty"`
+	RequesterDisplayKey string              `json:"requester_display_key"`
+	Task                string              `json:"task"`
+	Cleanup             string              `json:"cleanup"` // delete, keep
+	Label               string              `json:"label,omitempty"`
+	TimeoutSeconds      int                 `json:"timeout_seconds,omitempty"`
+	CreatedAt           int64               `json:"created_at"`
+	StartedAt           *int64              `json:"started_at,omitempty"`
+	EndedAt             *int64              `json:"ended_at,omitempty"`
+	Outcome             *SubagentRunOutcome `json:"outcome,omitempty"`
+	ArchiveAtMs         *int64              `json:"archive_at_ms,omitempty"`
+	CleanupCompletedAt  *int64              `json:"cleanup_completed_at,omitempty"`
+	CleanupHandled      bool                `json:"cleanup_handled"`
 }
 
 // SubagentRegistry 分身注册表
@@ -91,6 +93,7 @@ func (r *SubagentRegistry) RegisterRun(params *SubagentRunParams) error {
 		Task:                params.Task,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
+		TimeoutSeconds:      params.TimeoutSeconds,
 		CreatedAt:           now,
 		StartedAt:           &now,
 		ArchiveAtMs:         archiveAtMs,
@@ -119,15 +122,16 @@ func (r *SubagentRegistry) RegisterRun(params *SubagentRunParams) error {
 
 // SubagentRunParams 注册参数
 type SubagentRunParams struct {
-	RunID                 string
-	ChildSessionKey       string
-	RequesterSessionKey   string
-	RequesterOrigin       *DeliveryContext
-	RequesterDisplayKey   string
-	Task                  string
-	Cleanup               string
-	Label                 string
-	ArchiveAfterMinutes   int
+	RunID               string
+	ChildSessionKey     string
+	RequesterSessionKey string
+	RequesterOrigin     *DeliveryContext
+	RequesterDisplayKey string
+	Task                string
+	Cleanup             string
+	Label               string
+	TimeoutSeconds      int
+	ArchiveAfterMinutes int
 }
 
 // GetRun 获取运行记录

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	agentruntime "github.com/smallnest/goclaw/agent/runtime"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
@@ -25,19 +26,21 @@ type DeliveryContext struct {
 type SubagentRunOutcome struct {
 	Status string `json:"status"` // ok, error, timeout, unknown
 	Error  string `json:"error,omitempty"`
+	Result string `json:"result,omitempty"`
 }
 
 // SubagentRunParams 分身运行参数
 type SubagentRunParams struct {
-	RunID                 string
-	ChildSessionKey       string
-	RequesterSessionKey   string
-	RequesterOrigin       *DeliveryContext
-	RequesterDisplayKey   string
-	Task                  string
-	Cleanup               string
-	Label                 string
-	ArchiveAfterMinutes   int
+	RunID               string
+	ChildSessionKey     string
+	RequesterSessionKey string
+	RequesterOrigin     *DeliveryContext
+	RequesterDisplayKey string
+	Task                string
+	Cleanup             string
+	Label               string
+	TimeoutSeconds      int
+	ArchiveAfterMinutes int
 }
 
 // SubagentSystemPromptParams 系统提示词参数
@@ -144,26 +147,25 @@ func GenerateRunID() string {
 
 // End SubagentTypes
 
-
 // SubagentSpawnToolParams 分身生成工具参数
 type SubagentSpawnToolParams struct {
-	Task            string `json:"task"`                        // 任务描述（必填）
-	Label           string `json:"label,omitempty"`              // 可选标签
-	AgentID         string `json:"agent_id,omitempty"`           // 目标 Agent ID
-	Model           string `json:"model,omitempty"`              // 模型覆盖
-	Thinking        string `json:"thinking,omitempty"`           // 思考级别
+	Task              string `json:"task"`                          // 任务描述（必填）
+	Label             string `json:"label,omitempty"`               // 可选标签
+	AgentID           string `json:"agent_id,omitempty"`            // 目标 Agent ID
+	Model             string `json:"model,omitempty"`               // 模型覆盖
+	Thinking          string `json:"thinking,omitempty"`            // 思考级别
 	RunTimeoutSeconds int    `json:"run_timeout_seconds,omitempty"` // 超时时间
-	Cleanup         string `json:"cleanup,omitempty"`             // 清理策略
+	Cleanup           string `json:"cleanup,omitempty"`             // 清理策略
 }
 
 // SubagentSpawnResult 分身生成结果
 type SubagentSpawnResult struct {
-	Status           string  `json:"status"`                     // accepted, forbidden, error
-	ChildSessionKey  string  `json:"child_session_key,omitempty"`
-	RunID            string  `json:"run_id,omitempty"`
-	Error            string  `json:"error,omitempty"`
-	ModelApplied     bool    `json:"model_applied,omitempty"`
-	Warning          string  `json:"warning,omitempty"`
+	Status          string `json:"status"` // accepted, forbidden, error
+	ChildSessionKey string `json:"child_session_key,omitempty"`
+	RunID           string `json:"run_id,omitempty"`
+	Error           string `json:"error,omitempty"`
+	ModelApplied    bool   `json:"model_applied,omitempty"`
+	Warning         string `json:"warning,omitempty"`
 }
 
 // SubagentRegistryInterface 分身注册表接口
@@ -283,9 +285,15 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 	}
 
 	// 获取请求者会话信息（从上下文获取）
-	// TODO: 从 context 中获取请求者会话密钥、agent ID 等
-	requesterSessionKey := "main" // 默认值
-	requesterAgentID := t.getAgentID(requesterSessionKey)
+	requesterSessionKey := readStringContext(ctx, agentruntime.CtxSessionKey)
+	if strings.TrimSpace(requesterSessionKey) == "" {
+		requesterSessionKey = "main"
+	}
+
+	requesterAgentID := readStringContext(ctx, agentruntime.CtxAgentID)
+	if requesterAgentID == "" && t.getAgentID != nil {
+		requesterAgentID = t.getAgentID(requesterSessionKey)
+	}
 	if requesterAgentID == "" {
 		requesterAgentID = "default"
 	}
@@ -309,8 +317,18 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 
 	// 解析请求者来源
 	requesterOrigin := &DeliveryContext{
-		Channel:   "cli", // 默认值
-		AccountID: "default",
+		Channel:   readStringContext(ctx, agentruntime.CtxChannel),
+		AccountID: readStringContext(ctx, agentruntime.CtxAccountID),
+		To:        readStringContext(ctx, agentruntime.CtxChatID),
+	}
+	if requesterOrigin.Channel == "" {
+		requesterOrigin.Channel = "cli"
+	}
+	if requesterOrigin.AccountID == "" {
+		requesterOrigin.AccountID = "default"
+	}
+	if requesterOrigin.To == "" {
+		requesterOrigin.To = requesterSessionKey
 	}
 
 	// 生成子会话密钥
@@ -319,35 +337,30 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 	// 生成运行 ID
 	runID := GenerateRunID()
 
-	// 构建分身系统提示词
-	childSystemPrompt := BuildSubagentSystemPrompt(&SubagentSystemPromptParams{
-		RequesterSessionKey: requesterSessionKey,
-		RequesterOrigin:     requesterOrigin,
-		ChildSessionKey:     childSessionKey,
-		Label:               spawnParams.Label,
-		Task:                spawnParams.Task,
-	})
-	_ = childSystemPrompt // TODO: 传递给分身实例使用
-
 	// 获取归档时间
 	archiveAfterMinutes := 60 // 默认值
+	timeoutSeconds := spawnParams.RunTimeoutSeconds
 	if defCfg := t.getDefaultConfig(); defCfg != nil && defCfg.Subagents != nil {
 		if defCfg.Subagents.ArchiveAfterMinutes > 0 {
 			archiveAfterMinutes = defCfg.Subagents.ArchiveAfterMinutes
+		}
+		if timeoutSeconds <= 0 && defCfg.Subagents.TimeoutSeconds > 0 {
+			timeoutSeconds = defCfg.Subagents.TimeoutSeconds
 		}
 	}
 
 	// 注册分身运行
 	if err := t.registry.RegisterRun(&SubagentRunParams{
-		RunID:                 runID,
-		ChildSessionKey:       childSessionKey,
-		RequesterSessionKey:   requesterSessionKey,
-		RequesterOrigin:       requesterOrigin,
-		RequesterDisplayKey:   requesterSessionKey,
-		Task:                  spawnParams.Task,
-		Cleanup:               spawnParams.Cleanup,
-		Label:                 spawnParams.Label,
-		ArchiveAfterMinutes:   archiveAfterMinutes,
+		RunID:               runID,
+		ChildSessionKey:     childSessionKey,
+		RequesterSessionKey: requesterSessionKey,
+		RequesterOrigin:     requesterOrigin,
+		RequesterDisplayKey: requesterSessionKey,
+		Task:                spawnParams.Task,
+		Cleanup:             spawnParams.Cleanup,
+		Label:               spawnParams.Label,
+		TimeoutSeconds:      timeoutSeconds,
+		ArchiveAfterMinutes: archiveAfterMinutes,
 	}); err != nil {
 		result := &SubagentSpawnResult{
 			Status: "error",
@@ -384,6 +397,18 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		zap.String("target_agent_id", targetAgentID))
 
 	return t.marshalResult(result), nil
+}
+
+func readStringContext(ctx context.Context, key agentruntime.CtxKey) string {
+	if ctx == nil {
+		return ""
+	}
+	v := ctx.Value(key)
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
 }
 
 // parseParams 解析参数
