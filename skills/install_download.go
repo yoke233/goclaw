@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/smallnest/goclaw/config"
 )
 
 // DownloadInstaller implements file download and extraction installations
@@ -134,7 +136,7 @@ func (d *DownloadInstaller) resolveTargetDir(spec *SkillInstallSpec) string {
 	}
 
 	// Default to ~/.goclaw/tools
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return "/tmp/goclaw-tools"
 	}

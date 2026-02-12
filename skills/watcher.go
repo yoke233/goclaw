@@ -25,12 +25,12 @@ type SkillsChangeEvent struct {
 
 // SkillsWatchState manages the state of a skills watcher
 type SkillsWatchState struct {
-	Watcher   *fsnotify.Watcher
-	PathsKey  string
-	DebounceMs int
-	Timer     *time.Timer
+	Watcher     *fsnotify.Watcher
+	PathsKey    string
+	DebounceMs  int
+	Timer       *time.Timer
 	PendingPath string
-	Mutex     sync.Mutex
+	Mutex       sync.Mutex
 }
 
 // Default ignored patterns for skills watching
@@ -42,17 +42,17 @@ var DefaultSkillsWatchIgnored = []*regexp.Regexp{
 
 // Global state for skills watching
 type SkillsWatchManager struct {
-	Listeners       map[string]func(SkillsChangeEvent)
+	Listeners         map[string]func(SkillsChangeEvent)
 	WorkspaceVersions map[string]int64
-	Watchers        map[string]*SkillsWatchState
-	GlobalVersion   int64
-	Mutex           sync.RWMutex
+	Watchers          map[string]*SkillsWatchState
+	GlobalVersion     int64
+	Mutex             sync.RWMutex
 }
 
 var globalWatchManager = &SkillsWatchManager{
-	Listeners:        make(map[string]func(SkillsChangeEvent)),
+	Listeners:         make(map[string]func(SkillsChangeEvent)),
 	WorkspaceVersions: make(map[string]int64),
-	Watchers:         make(map[string]*SkillsWatchState),
+	Watchers:          make(map[string]*SkillsWatchState),
 }
 
 // RegisterSkillsChangeListener registers a listener for skills change events
@@ -235,7 +235,7 @@ func resolveWatchPaths(workspaceDir string, cfg *config.Config) []string {
 	}
 
 	// Add managed skills directory
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err == nil {
 		managedSkills := filepath.Join(home, ".goclaw", "skills")
 		if exists(managedSkills) {

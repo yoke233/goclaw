@@ -13,6 +13,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/manifoldco/promptui"
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/session"
 )
 
@@ -38,24 +39,24 @@ type ArgSpec struct {
 
 // CommandRegistry 命令注册表
 type CommandRegistry struct {
-	commands    map[string]*Command
-	homeDir     string
-	menuMode    bool // 是否在菜单选择模式
-	sessionMgr  *session.Manager
-	stopped     bool // 停止标志，用于中止正在运行的 agent
-	toolGetter  func() (map[string]interface{}, error) // 获取工具列表的函数
-	skillsGetter func() ([]*SkillInfo, error)         // 获取技能列表的函数
+	commands     map[string]*Command
+	homeDir      string
+	menuMode     bool // 是否在菜单选择模式
+	sessionMgr   *session.Manager
+	stopped      bool                                   // 停止标志，用于中止正在运行的 agent
+	toolGetter   func() (map[string]interface{}, error) // 获取工具列表的函数
+	skillsGetter func() ([]*SkillInfo, error)           // 获取技能列表的函数
 }
 
 // SkillInfo 技能信息
 type SkillInfo struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Version     string   `json:"version"`
-	Author      string   `json:"author"`
-	Homepage    string   `json:"homepage"`
-	Always      bool     `json:"always"`
-	Emoji       string   `json:"emoji"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Version     string           `json:"version"`
+	Author      string           `json:"author"`
+	Homepage    string           `json:"homepage"`
+	Always      bool             `json:"always"`
+	Emoji       string           `json:"emoji"`
 	MissingDeps *MissingDepsInfo `json:"missing_deps,omitempty"`
 }
 
@@ -70,7 +71,7 @@ type MissingDepsInfo struct {
 
 // NewCommandRegistry 创建命令注册表
 func NewCommandRegistry() *CommandRegistry {
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ := config.ResolveUserHomeDir()
 	registry := &CommandRegistry{
 		commands: make(map[string]*Command),
 		homeDir:  homeDir,
@@ -1027,4 +1028,3 @@ func (r *CommandRegistry) hasMissingDeps(deps *MissingDepsInfo) bool {
 		len(deps.PythonPkgs) > 0 || len(deps.NodePkgs) > 0 ||
 		len(deps.Env) > 0
 }
-

@@ -8,30 +8,32 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/smallnest/goclaw/config"
 )
 
 // QMDManager 管理 QMD 进程和集合
 type QMDManager struct {
-	config          QMDConfig
-	workspace       string
-	agentID         string
-	mu              sync.RWMutex
-	collections     map[string]*QMDCollection
-	initialized     bool
+	config            QMDConfig
+	workspace         string
+	agentID           string
+	mu                sync.RWMutex
+	collections       map[string]*QMDCollection
+	initialized       bool
 	fallbackToBuiltin bool
-	lastError       error
-	lastUpdated     time.Time
-	lastEmbed       time.Time
+	lastError         error
+	lastUpdated       time.Time
+	lastEmbed         time.Time
 }
 
 // NewQMDManager 创建 QMD 管理器
 func NewQMDManager(config QMDConfig, workspace, agentID string) *QMDManager {
 	return &QMDManager{
-		config:          config,
-		workspace:       workspace,
-		agentID:         agentID,
-		collections:     make(map[string]*QMDCollection),
-		initialized:     false,
+		config:            config,
+		workspace:         workspace,
+		agentID:           agentID,
+		collections:       make(map[string]*QMDCollection),
+		initialized:       false,
 		fallbackToBuiltin: false,
 	}
 }
@@ -319,7 +321,7 @@ func (m *QMDManager) Close() error {
 // expandHomeDir 扩展 ~ 为用户主目录
 func expandHomeDir(path string) string {
 	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := config.ResolveUserHomeDir()
 		if err == nil {
 			return filepath.Join(home, path[2:])
 		}

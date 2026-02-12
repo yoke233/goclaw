@@ -15,6 +15,7 @@ import (
 	"github.com/mafredri/cdp/protocol/input"
 	"github.com/mafredri/cdp/protocol/page"
 	"github.com/mafredri/cdp/protocol/runtime"
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -36,7 +37,7 @@ func NewBrowserTool(headless bool, timeout int) *BrowserTool {
 	}
 
 	// 设置固定输出目录用于保存截图
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ := config.ResolveUserHomeDir()
 	outputDir := filepath.Join(homeDir, "goclaw-screenshots")
 
 	return &BrowserTool{

@@ -218,14 +218,14 @@ func expandHomeDir(path string) string {
 		return path
 	}
 	if p == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := config.ResolveUserHomeDir(); err == nil {
 			return home
 		}
 		return path
 	}
 
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
-		home, err := os.UserHomeDir()
+		home, err := config.ResolveUserHomeDir()
 		if err != nil || strings.TrimSpace(home) == "" {
 			return path
 		}

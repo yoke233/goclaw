@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 )
@@ -65,7 +66,7 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 	if sessionsListStore != "" {
 		sessionDir = sessionsListStore
 	} else {
-		homeDir, err := os.UserHomeDir()
+		homeDir, err := config.ResolveUserHomeDir()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 			os.Exit(1)

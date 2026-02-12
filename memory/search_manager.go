@@ -40,7 +40,7 @@ type QMDSearchManager struct {
 
 // NewBuiltinSearchManager 创建 builtin 搜索管理器
 func NewBuiltinSearchManager(cfg config.MemoryConfig, workspace string) (MemorySearchManager, error) {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}

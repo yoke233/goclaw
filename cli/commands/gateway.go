@@ -172,7 +172,11 @@ func runGateway(cmd *cobra.Command, args []string) {
 	messageBus := bus.NewMessageBus(100)
 	defer messageBus.Close()
 
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	homeDir, err := config.ResolveUserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	sessionDir := filepath.Join(homeDir, ".goclaw", "sessions")
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		logger.Fatal("Failed to create session manager", zap.Error(err))
@@ -452,7 +456,7 @@ const (
 // macOS service functions
 
 func installMacOSService(execPath string) {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -572,7 +576,7 @@ func installMacOSService(execPath string) {
 }
 
 func uninstallMacOSService() {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -601,7 +605,7 @@ func uninstallMacOSService() {
 }
 
 func startMacOSService() {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -638,7 +642,7 @@ func startMacOSService() {
 }
 
 func stopMacOSService() {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -677,7 +681,7 @@ func restartMacOSService() {
 // Linux service functions
 
 func installLinuxService(execPath string) {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -783,7 +787,7 @@ WantedBy=default.target
 }
 
 func uninstallLinuxService() {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
 		os.Exit(1)
@@ -820,7 +824,7 @@ func uninstallLinuxService() {
 
 func startLinuxService() {
 	// Check if service file exists
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ := config.ResolveUserHomeDir()
 	servicePath := filepath.Join(homeDir, linuxServiceDir, linuxServiceFile)
 
 	if _, err := os.Stat(servicePath); os.IsNotExist(err) {

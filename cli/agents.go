@@ -96,7 +96,7 @@ type AgentInfo struct {
 
 // runAgentsList lists all configured agents
 func runAgentsList(cmd *cobra.Command, args []string) {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 		os.Exit(1)
@@ -163,7 +163,7 @@ func runAgentsAdd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 		os.Exit(1)
@@ -246,7 +246,7 @@ func runAgentsAdd(cmd *cobra.Command, args []string) {
 func runAgentsDelete(cmd *cobra.Command, args []string) {
 	name := args[0]
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 		os.Exit(1)

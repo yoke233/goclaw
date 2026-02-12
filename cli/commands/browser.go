@@ -18,6 +18,7 @@ import (
 	"github.com/mafredri/cdp/protocol/runtime"
 	"github.com/mafredri/cdp/protocol/target"
 	"github.com/smallnest/goclaw/agent/tools"
+	"github.com/smallnest/goclaw/config"
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +30,7 @@ type BrowserCommandRegistry struct {
 
 // NewBrowserCommandRegistry Create browser command registry
 func NewBrowserCommandRegistry() *BrowserCommandRegistry {
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ := config.ResolveUserHomeDir()
 	return &BrowserCommandRegistry{
 		sessionMgr: tools.GetBrowserSession(),
 		homeDir:    homeDir,

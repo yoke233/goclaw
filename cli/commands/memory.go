@@ -164,7 +164,7 @@ func init() {
 
 // getWorkspace 获取工作区路径
 func getWorkspace() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return "", err
 	}
@@ -309,7 +309,7 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 		}
 
 		if ms.Sessions.ExportDir == "" {
-			home, _ := os.UserHomeDir()
+			home, _ := config.ResolveUserHomeDir()
 			ms.Sessions.ExportDir = filepath.Join(home, ".goclaw", "sessions", "export")
 		}
 		ms.Sessions.ExportDir = expandHomeDir(ms.Sessions.ExportDir)
@@ -781,7 +781,7 @@ func buildMemsearchCommonArgs(cfg config.MemsearchConfig, includeEmbeddingArgs b
 }
 
 func defaultSessionDir() string {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
 		return filepath.Join(".goclaw", "sessions")
 	}
@@ -794,14 +794,14 @@ func expandHomeDir(path string) string {
 		return path
 	}
 	if p == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := config.ResolveUserHomeDir(); err == nil {
 			return home
 		}
 		return path
 	}
 
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
-		home, err := os.UserHomeDir()
+		home, err := config.ResolveUserHomeDir()
 		if err != nil || strings.TrimSpace(home) == "" {
 			return path
 		}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/smallnest/goclaw/config"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -176,7 +177,7 @@ func runApprovalsAllowlistRemove(cmd *cobra.Command, args []string) {
 
 // getApprovalsConfigPath returns the path to the approvals config file
 func getApprovalsConfigPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return "", err
 	}

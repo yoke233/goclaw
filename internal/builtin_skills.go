@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/smallnest/goclaw/config"
 )
 
 //go:embed builtin_skills config.example.json
@@ -13,9 +15,9 @@ var builtinSkillsFS embed.FS
 
 // GetHomeDir 获取用户主目录
 func GetHomeDir() string {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
-		return os.Getenv("HOME")
+		return ""
 	}
 	return home
 }

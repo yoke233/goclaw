@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/smallnest/goclaw/config"
 )
 
 // GoInstaller implements Go module installations
@@ -112,7 +114,7 @@ func (g *GoInstaller) isInstalledInGOBIN(binName string) bool {
 	gobin := os.Getenv("GOBIN")
 	if gobin == "" {
 		// Default to Go's default location
-		home, err := os.UserHomeDir()
+		home, err := config.ResolveUserHomeDir()
 		if err != nil {
 			return false
 		}

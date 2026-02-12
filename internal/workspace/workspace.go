@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/smallnest/goclaw/config"
 )
 
 //go:embed templates/*.md
@@ -40,7 +42,7 @@ func NewManager(workspaceDir string) *Manager {
 
 // GetDefaultWorkspaceDir 获取默认 workspace 目录
 func GetDefaultWorkspaceDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}

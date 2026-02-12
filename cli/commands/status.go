@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 )
@@ -75,8 +76,12 @@ type SystemStatus struct {
 // runStatus displays status information
 func runStatus(cmd *cobra.Command, args []string) {
 	// Create status object
+	homeDir, err := config.ResolveUserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
 	status := &SystemStatus{
-		SessionDir: filepath.Join(os.Getenv("HOME"), ".goclaw", "sessions"),
+		SessionDir: filepath.Join(homeDir, ".goclaw", "sessions"),
 	}
 
 	// Check gateway status
@@ -205,6 +210,10 @@ func outputStatusJSON(status *SystemStatus) {
 
 // outputStatusText outputs status as formatted text
 func outputStatusText(status *SystemStatus) {
+	homeDir, err := config.ResolveUserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
 	fmt.Println("=== goclaw Status ===")
 
 	// Gateway status
@@ -267,7 +276,7 @@ func outputStatusText(status *SystemStatus) {
 	if statusVerbose {
 		fmt.Printf("\nVerbose Information:\n")
 		fmt.Printf("  Session Directory: %s\n", status.SessionDir)
-		fmt.Printf("  Configuration: %s\n", filepath.Join(os.Getenv("HOME"), ".goclaw", "config.yaml"))
+		fmt.Printf("  Configuration: %s\n", filepath.Join(homeDir, ".goclaw", "config.yaml"))
 	}
 
 	if statusDebug {

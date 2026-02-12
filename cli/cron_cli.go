@@ -622,7 +622,7 @@ type RunHistory struct {
 }
 
 func getCronDir(cfg *config.Config) string {
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ := config.ResolveUserHomeDir()
 	return filepath.Join(homeDir, ".goclaw", "cron")
 }
 

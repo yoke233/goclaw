@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -30,13 +31,13 @@ type InstallRequest struct {
 
 // InstallResult represents the result of a skill installation
 type InstallResult struct {
-	Success    bool
-	Message    string
-	Stdout     string
-	Stderr     string
-	ExitCode   *int
-	Warnings   []string
-	Installed  []string // Installed binaries
+	Success   bool
+	Message   string
+	Stdout    string
+	Stderr    string
+	ExitCode  *int
+	Warnings  []string
+	Installed []string // Installed binaries
 }
 
 // Installer is the interface for installing skills
@@ -362,7 +363,7 @@ func detectInstalledBinaries(bins []string) []string {
 // ResolveUserPath expands user home directory (~) in paths
 func ResolveUserPath(path string) string {
 	if strings.HasPrefix(path, "~") {
-		home, err := os.UserHomeDir()
+		home, err := config.ResolveUserHomeDir()
 		if err == nil {
 			return filepath.Join(home, strings.TrimPrefix(path, "~"))
 		}

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
 	"github.com/spf13/cobra"
 )
 
@@ -88,7 +89,7 @@ func runLogs(cmd *cobra.Command, args []string) {
 
 // detectLogPath 自动检测日志文件路径
 func detectLogPath() string {
-	home, err := os.UserHomeDir()
+	home, err := config.ResolveUserHomeDir()
 	if err != nil {
 		return ""
 	}
