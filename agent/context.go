@@ -131,6 +131,8 @@ func (b *ContextBuilder) buildIdentityAndTools() string {
 		"run_shell":              "Run shell commands (supports timeout and error handling)",
 		"web_search":             "Search the web using API",
 		"web_fetch":              "Fetch web pages",
+		"memory_search":          "Search stored memory for user preferences, prior decisions, and project context",
+		"memory_add":             "Persist durable facts and user preferences for future conversations",
 		"use_skill":              "Load a specialized skill. SKILLS HAVE HIGHEST PRIORITY - always check Skills section first before using other tools",
 		"sessions_spawn":         "Spawn a background sub-agent run for concurrent execution and automatically announce results back to the requester session",
 	}
@@ -168,7 +170,10 @@ If a task is more complex or takes longer, use smart_search first, then browser 
 7. DO NOT tell the user "I cannot" or "here's how to do it yourself". ACTUALLY DO IT with tools.
 8. If you have tools available for a task, use them. No permission needed for safe operations.
 9. **NEVER HALLUCINATE SEARCH RESULTS**: When presenting search results, ONLY use the exact data returned by the tool. If no results were found, clearly state that no results were found.
-10. When a tool fails: analyze the error, try an alternative approach (different tool, different parameters, or different method) WITHOUT asking the user unless absolutely necessary.`,
+10. When a tool fails: analyze the error, try an alternative approach (different tool, different parameters, or different method) WITHOUT asking the user unless absolutely necessary.
+11. If the user states a durable preference, rule, or profile fact and memory_add is available: call memory_add proactively (prefer source=longterm, type=preference for user preferences), then continue normally.
+12. Before planning complex tasks (milestones, decomposition, staffing) and memory_search is available: first call memory_search to retrieve prior preferences/constraints, then produce the plan.
+13. NEVER ask the user to manually provide tool-call JSON/arguments unless they explicitly request debugging the tool call itself.`,
 		now.Format("2006-01-02 15:04:05 MST"),
 		b.workspace,
 		strings.Join(toolLines, "\n"))
@@ -179,7 +184,7 @@ func (b *ContextBuilder) buildToolSummaryLines(coreToolSummaries map[string]stri
 		"smart_search", "browser_navigate", "browser_screenshot", "browser_get_text",
 		"browser_click", "browser_fill_input", "browser_execute_script",
 		"read_file", "write_file", "list_files", "run_shell",
-		"web_search", "web_fetch", "use_skill", "sessions_spawn",
+		"web_search", "web_fetch", "memory_search", "memory_add", "use_skill", "sessions_spawn",
 	}
 
 	if b.tools == nil {

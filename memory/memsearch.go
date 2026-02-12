@@ -45,7 +45,7 @@ func (m *MemsearchSearchManager) Search(ctx context.Context, query string, opts 
 		args = append(args, "--top-k", fmt.Sprintf("%d", opts.Limit))
 	}
 
-	args = append(args, m.buildCommonArgs()...)
+	args = append(args, m.buildCommonArgs(true)...)
 
 	output, err := runMemsearchCommand(ctx, m.cfg.Command, args, m.cfg)
 	if err != nil {
@@ -95,7 +95,7 @@ func (m *MemsearchSearchManager) Add(ctx context.Context, text string, source Me
 	}
 
 	memoryDir := filepath.Join(m.workspace, "memory")
-	_, err := runMemsearchCommand(ctx, m.cfg.Command, append([]string{"index", memoryDir}, m.buildCommonArgs()...), m.cfg)
+	_, err := runMemsearchCommand(ctx, m.cfg.Command, append([]string{"index", memoryDir}, m.buildCommonArgs(true)...), m.cfg)
 	return err
 }
 
@@ -107,7 +107,7 @@ func (m *MemsearchSearchManager) GetStatus() map[string]interface{} {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	args := append([]string{"stats"}, m.buildCommonArgs()...)
+	args := append([]string{"stats"}, m.buildCommonArgs(false)...)
 	output, err := runMemsearchCommand(ctx, m.cfg.Command, args, m.cfg)
 	if err != nil {
 		status["error"] = err.Error()
@@ -129,21 +129,23 @@ func (m *MemsearchSearchManager) Close() error {
 	return nil
 }
 
-// buildCommonArgs builds shared CLI args for memsearch
-func (m *MemsearchSearchManager) buildCommonArgs() []string {
+// buildCommonArgs builds CLI args for memsearch.
+func (m *MemsearchSearchManager) buildCommonArgs(includeEmbeddingArgs bool) []string {
 	args := []string{}
 
-	if strings.TrimSpace(m.cfg.Provider) != "" {
-		args = append(args, "--provider", m.cfg.Provider)
-	}
-	if strings.TrimSpace(m.cfg.Model) != "" {
-		args = append(args, "--model", m.cfg.Model)
+	if includeEmbeddingArgs {
+		if strings.TrimSpace(m.cfg.Provider) != "" {
+			args = append(args, "--provider", m.cfg.Provider)
+		}
+		if strings.TrimSpace(m.cfg.Model) != "" {
+			args = append(args, "--model", m.cfg.Model)
+		}
 	}
 	if strings.TrimSpace(m.cfg.Collection) != "" {
 		args = append(args, "--collection", m.cfg.Collection)
 	}
 	if strings.TrimSpace(m.cfg.MilvusURI) != "" {
-		args = append(args, "--milvus-uri", m.cfg.MilvusURI)
+		args = append(args, "--milvus-uri", expandHomeDir(m.cfg.MilvusURI))
 	}
 	if strings.TrimSpace(m.cfg.MilvusToken) != "" {
 		args = append(args, "--milvus-token", m.cfg.MilvusToken)
@@ -196,7 +198,7 @@ func checkMemsearchAvailable(command string, memCfg config.MemsearchConfig) erro
 }
 
 func parseMemsearchStats(output string) (int, bool) {
-	re := regexp.MustCompile(`(?i)total\\s+indexed\\s+chunks\\s*:\\s*(\\d+)`)
+	re := regexp.MustCompile(`(?i)total\s+indexed\s+chunks\s*:\s*(\d+)`)
 	match := re.FindStringSubmatch(output)
 	if len(match) != 2 {
 		return 0, false
@@ -208,6 +210,30 @@ func parseMemsearchStats(output string) (int, bool) {
 		return 0, false
 	}
 	return total, true
+}
+
+func expandHomeDir(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return path
+	}
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return path
+		}
+		rest := strings.TrimPrefix(strings.TrimPrefix(p, "~/"), "~\\")
+		return filepath.Join(home, filepath.FromSlash(rest))
+	}
+
+	return path
 }
 
 func appendDailyNote(workspace, text string) error {

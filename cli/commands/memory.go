@@ -301,7 +301,7 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 	if ms.Sessions.Enabled {
 		sessionDir, err := qmd.FindSessionDir(workspace)
 		if err != nil {
-			sessionDir = filepath.Join(os.Getenv("HOME"), ".goclaw", "sessions")
+			sessionDir = defaultSessionDir()
 		}
 
 		if _, err := memory.PruneSessionJSONL(sessionDir, ms.Sessions.RetentionDays); err != nil {
@@ -312,6 +312,7 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 			home, _ := os.UserHomeDir()
 			ms.Sessions.ExportDir = filepath.Join(home, ".goclaw", "sessions", "export")
 		}
+		ms.Sessions.ExportDir = expandHomeDir(ms.Sessions.ExportDir)
 
 		if _, err := memory.ExportSessionsToMarkdown(sessionDir, ms.Sessions.ExportDir, ms.Sessions.RetentionDays, ms.Sessions.Redact); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to export sessions: %v\n", err)
@@ -325,7 +326,7 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 	if memoryIndexForce {
 		indexArgs = append(indexArgs, "--force")
 	}
-	indexArgs = append(indexArgs, buildMemsearchCommonArgs(ms)...)
+	indexArgs = append(indexArgs, buildMemsearchCommonArgs(ms, true)...)
 
 	if err := runMemsearchStreaming(ms, indexArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "Index failed: %v\n", err)
@@ -450,7 +451,7 @@ func runMemoryWatch(cmd *cobra.Command, args []string) {
 		watchArgs = append(watchArgs, "--debounce-ms", fmt.Sprintf("%d", debounce))
 	}
 
-	watchArgs = append(watchArgs, buildMemsearchCommonArgs(ms)...)
+	watchArgs = append(watchArgs, buildMemsearchCommonArgs(ms, true)...)
 	if err := runMemsearchStreaming(ms, watchArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "Watch failed: %v\n", err)
 		os.Exit(1)
@@ -495,7 +496,7 @@ func runMemoryCompact(cmd *cobra.Command, args []string) {
 		compactArgs = append(compactArgs, "--prompt-file", memoryCompactPromptFile)
 	}
 
-	compactArgs = append(compactArgs, buildMemsearchCommonArgs(ms)...)
+	compactArgs = append(compactArgs, buildMemsearchCommonArgs(ms, true)...)
 	if err := runMemsearchStreaming(ms, compactArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "Compact failed: %v\n", err)
 		os.Exit(1)
@@ -526,7 +527,7 @@ func runMemoryExpand(cmd *cobra.Command, args []string) {
 		expandArgs = append(expandArgs, "--json-output")
 	}
 
-	expandArgs = append(expandArgs, buildMemsearchCommonArgs(ms)...)
+	expandArgs = append(expandArgs, buildMemsearchCommonArgs(ms, true)...)
 	if err := runMemsearchStreaming(ms, expandArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "Expand failed: %v\n", err)
 		os.Exit(1)
@@ -594,7 +595,7 @@ func runMemoryReset(cmd *cobra.Command, args []string) {
 	if memoryResetYes {
 		resetArgs = append(resetArgs, "--yes")
 	}
-	resetArgs = append(resetArgs, buildMemsearchCommonArgs(ms)...)
+	resetArgs = append(resetArgs, buildMemsearchCommonArgs(ms, false)...)
 
 	if err := runMemsearchStreaming(ms, resetArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "Reset failed: %v\n", err)
@@ -757,24 +758,58 @@ func resolveMemsearchConfig(cfg *config.Config) config.MemsearchConfig {
 	return ms
 }
 
-func buildMemsearchCommonArgs(cfg config.MemsearchConfig) []string {
+func buildMemsearchCommonArgs(cfg config.MemsearchConfig, includeEmbeddingArgs bool) []string {
 	args := []string{}
-	if strings.TrimSpace(cfg.Provider) != "" {
-		args = append(args, "--provider", cfg.Provider)
-	}
-	if strings.TrimSpace(cfg.Model) != "" {
-		args = append(args, "--model", cfg.Model)
+	if includeEmbeddingArgs {
+		if strings.TrimSpace(cfg.Provider) != "" {
+			args = append(args, "--provider", cfg.Provider)
+		}
+		if strings.TrimSpace(cfg.Model) != "" {
+			args = append(args, "--model", cfg.Model)
+		}
 	}
 	if strings.TrimSpace(cfg.Collection) != "" {
 		args = append(args, "--collection", cfg.Collection)
 	}
 	if strings.TrimSpace(cfg.MilvusURI) != "" {
-		args = append(args, "--milvus-uri", cfg.MilvusURI)
+		args = append(args, "--milvus-uri", expandHomeDir(cfg.MilvusURI))
 	}
 	if strings.TrimSpace(cfg.MilvusToken) != "" {
 		args = append(args, "--milvus-token", cfg.MilvusToken)
 	}
 	return args
+}
+
+func defaultSessionDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return filepath.Join(".goclaw", "sessions")
+	}
+	return filepath.Join(home, ".goclaw", "sessions")
+}
+
+func expandHomeDir(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return path
+	}
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return path
+		}
+		rest := strings.TrimPrefix(strings.TrimPrefix(p, "~/"), "~\\")
+		return filepath.Join(home, filepath.FromSlash(rest))
+	}
+
+	return path
 }
 
 func ensureMemsearchAvailable(cfg config.MemsearchConfig) error {
