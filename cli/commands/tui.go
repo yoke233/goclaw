@@ -11,6 +11,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/smallnest/goclaw/agent"
+	agentruntime "github.com/smallnest/goclaw/agent/runtime"
 	tasksdk "github.com/smallnest/goclaw/agent/tasksdk"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
@@ -117,6 +118,8 @@ func runTUI(cmd *cobra.Command, args []string) {
 
 	// Create tool registry
 	toolRegistry := agent.NewToolRegistry()
+	contextBuilder := agent.NewContextBuilder(memoryStore, workspace)
+	contextBuilder.SetToolRegistry(toolRegistry)
 
 	// Register memory tools
 	if searchMgr != nil {
@@ -194,6 +197,13 @@ func runTUI(cmd *cobra.Command, args []string) {
 	}
 	defer func() { _ = agentSDKTaskStore.Close() }()
 
+	taskTracker, err := tasksdk.NewTracker(agentSDKTaskStore, filepath.Join(workspace, "data", "subagent_task_tracker.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize subagent task tracker: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = taskTracker.Close() }()
+
 	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
@@ -205,6 +215,22 @@ func runTUI(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	defer func() { _ = mainRuntime.Close() }()
+
+	subagentRuntime, _ := buildSubagentRuntimeForTUI(cfg)
+	agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
+		Bus:             messageBus,
+		SessionMgr:      sessionMgr,
+		Tools:           toolRegistry,
+		DataDir:         workspace,
+		Workspace:       workspace,
+		SubagentRuntime: subagentRuntime,
+		MainRuntime:     mainRuntime,
+		TaskStore:       taskTracker,
+	})
+	if err := agentManager.SetupFromConfig(cfg, contextBuilder); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to setup agent manager: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Always create a new session unless --session 显式指定
 	sessionKey, _ := agent.ResolveSessionKey(agent.SessionKeyOptions{
@@ -289,7 +315,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 		defer msgCancel()
 
-		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry)
+		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		} else {
@@ -372,7 +398,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		timeout := time.Duration(tuiTimeoutMs) * time.Millisecond
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 
-		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry)
+		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager)
 		msgCancel()
 
 		if err != nil {
@@ -398,6 +424,7 @@ func runAgentIteration(
 	mainRuntime agent.MainRuntime,
 	toolRegistry *agent.ToolRegistry,
 	cmdRegistry *CommandRegistry,
+	agentManager *agent.AgentManager,
 ) (string, error) {
 	if cmdRegistry != nil && cmdRegistry.IsStopped() {
 		return "", nil
@@ -421,13 +448,47 @@ func runAgentIteration(
 		return "", nil
 	}
 
-	resp, err := mainRuntime.Run(ctx, agent.MainRunRequest{
-		AgentID:    "default",
-		SessionKey: sess.Key,
-		Prompt:     prompt,
+	runAgentID := "default"
+	runSystemPrompt := ""
+	runWorkspace := ""
+
+	if agentManager != nil {
+		selectedAgent, ok := agentManager.GetAgent(runAgentID)
+		if !ok {
+			if defaultAgent := agentManager.GetDefaultAgent(); defaultAgent != nil {
+				selectedAgent = defaultAgent
+				if id := resolveAgentID(agentManager, defaultAgent); id != "" {
+					runAgentID = id
+				}
+			}
+		}
+		if selectedAgent != nil {
+			if state := selectedAgent.GetState(); strings.TrimSpace(state.SystemPrompt) != "" {
+				runSystemPrompt = strings.TrimSpace(state.SystemPrompt)
+			}
+			if ws := strings.TrimSpace(selectedAgent.GetWorkspace()); ws != "" {
+				runWorkspace = ws
+			}
+		}
+	}
+
+	channel, accountID, chatID := parseSessionKey(sess.Key)
+	runCtx := context.WithValue(ctx, agentruntime.CtxSessionKey, sess.Key)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxAgentID, runAgentID)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxChannel, channel)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxAccountID, accountID)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxChatID, chatID)
+
+	resp, err := mainRuntime.Run(runCtx, agent.MainRunRequest{
+		AgentID:      runAgentID,
+		SessionKey:   sess.Key,
+		Prompt:       prompt,
+		SystemPrompt: runSystemPrompt,
+		Workspace:    runWorkspace,
 		Metadata: map[string]any{
-			"channel": "tui",
-			"chat_id": sess.Key,
+			"channel":    channel,
+			"account_id": accountID,
+			"chat_id":    chatID,
 		},
 	})
 	if err != nil {
@@ -516,6 +577,72 @@ func findMostRecentTUISession(mgr *session.Manager) string {
 	})
 
 	return tuiSessions[0].key
+}
+
+func parseSessionKey(sessionKey string) (channel string, accountID string, chatID string) {
+	parts := strings.Split(strings.TrimSpace(sessionKey), ":")
+	switch {
+	case len(parts) >= 3:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(strings.Join(parts[2:], ":"))
+	case len(parts) == 2:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "default"
+	case len(parts) == 1 && strings.TrimSpace(parts[0]) != "":
+		return "cli", "default", strings.TrimSpace(parts[0])
+	default:
+		return "cli", "default", "default"
+	}
+}
+
+func resolveAgentID(manager *agent.AgentManager, target *agent.Agent) string {
+	if manager == nil || target == nil {
+		return ""
+	}
+	for _, id := range manager.ListAgents() {
+		current, ok := manager.GetAgent(id)
+		if !ok {
+			continue
+		}
+		if current == target {
+			return id
+		}
+	}
+	return ""
+}
+
+func buildSubagentRuntimeForTUI(cfg *config.Config) (agentruntime.SubagentRuntime, string) {
+	subagentCfg := cfg.Agents.Defaults.Subagents
+	roleLimits := map[string]int{}
+	defaultMaxConcurrent := 8
+	if subagentCfg != nil {
+		if subagentCfg.MaxConcurrent > 0 {
+			defaultMaxConcurrent = subagentCfg.MaxConcurrent
+		}
+		for role, limit := range subagentCfg.RoleMaxConcurrent {
+			if limit <= 0 {
+				continue
+			}
+			roleLimits[role] = limit
+		}
+	}
+	rolePool := agentruntime.NewSimpleRolePool(defaultMaxConcurrent, roleLimits)
+
+	subagentModel := "claude-sonnet-4-5"
+	if subagentCfg != nil && strings.TrimSpace(subagentCfg.Model) != "" {
+		subagentModel = strings.TrimSpace(subagentCfg.Model)
+	}
+
+	maxTokens := cfg.Agents.Defaults.MaxTokens
+	temperature := cfg.Agents.Defaults.Temperature
+
+	return agentruntime.NewAgentsdkRuntime(agentruntime.AgentsdkRuntimeOptions{
+		Pool:             rolePool,
+		AnthropicAPIKey:  strings.TrimSpace(cfg.Providers.Anthropic.APIKey),
+		AnthropicBaseURL: strings.TrimSpace(cfg.Providers.Anthropic.BaseURL),
+		ModelName:        subagentModel,
+		MaxTokens:        maxTokens,
+		Temperature:      temperature,
+		MaxIterations:    cfg.Agents.Defaults.MaxIterations,
+	}), "agentsdk"
 }
 
 // FailureTracker 追踪工具调用失败

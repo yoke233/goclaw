@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/smallnest/goclaw/agent"
+	agentruntime "github.com/smallnest/goclaw/agent/runtime"
 	tasksdk "github.com/smallnest/goclaw/agent/tasksdk"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
@@ -119,6 +120,8 @@ func runAgent(cmd *cobra.Command, args []string) {
 
 	// Create tool registry
 	toolRegistry := agent.NewToolRegistry()
+	contextBuilder := agent.NewContextBuilder(memoryStore, workspace)
+	contextBuilder.SetToolRegistry(toolRegistry)
 
 	// Register memory tools
 	if searchMgr != nil {
@@ -199,6 +202,13 @@ func runAgent(cmd *cobra.Command, args []string) {
 	}
 	defer func() { _ = agentSDKTaskStore.Close() }()
 
+	taskTracker, err := tasksdk.NewTracker(agentSDKTaskStore, filepath.Join(workspace, "data", "subagent_task_tracker.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize subagent task tracker: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = taskTracker.Close() }()
+
 	// Create main runtime
 	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
@@ -211,6 +221,22 @@ func runAgent(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	defer func() { _ = mainRuntime.Close() }()
+
+	subagentRuntime, _ := buildSubagentRuntime(cfg)
+	agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
+		Bus:             messageBus,
+		SessionMgr:      sessionMgr,
+		Tools:           toolRegistry,
+		DataDir:         workspace,
+		Workspace:       workspace,
+		SubagentRuntime: subagentRuntime,
+		MainRuntime:     mainRuntime,
+		TaskStore:       taskTracker,
+	})
+	if err := agentManager.SetupFromConfig(cfg, contextBuilder); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to setup agent manager: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(agentTimeout)*time.Second)
@@ -240,14 +266,49 @@ func runAgent(cmd *cobra.Command, args []string) {
 		Timestamp: time.Now(),
 	})
 
-	runResp, err := mainRuntime.Run(ctx, agent.MainRunRequest{
-		AgentID:      strings.TrimSpace(agentTo),
+	runAgentID := strings.TrimSpace(agentTo)
+	if runAgentID == "" {
+		runAgentID = "default"
+	}
+
+	runSystemPrompt := contextBuilder.BuildSystemPrompt(nil)
+	runWorkspace := workspace
+
+	selectedAgent, ok := agentManager.GetAgent(runAgentID)
+	if !ok {
+		if defaultAgent := agentManager.GetDefaultAgent(); defaultAgent != nil {
+			selectedAgent = defaultAgent
+			if id := resolveAgentID(agentManager, defaultAgent); id != "" {
+				runAgentID = id
+			}
+		}
+	}
+	if selectedAgent != nil {
+		if state := selectedAgent.GetState(); strings.TrimSpace(state.SystemPrompt) != "" {
+			runSystemPrompt = strings.TrimSpace(state.SystemPrompt)
+		}
+		if ws := strings.TrimSpace(selectedAgent.GetWorkspace()); ws != "" {
+			runWorkspace = ws
+		}
+	}
+
+	channel, accountID, chatID := parseSessionKey(sessionKey)
+	runCtx := context.WithValue(ctx, agentruntime.CtxSessionKey, sessionKey)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxAgentID, runAgentID)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxChannel, channel)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxAccountID, accountID)
+	runCtx = context.WithValue(runCtx, agentruntime.CtxChatID, chatID)
+
+	runResp, err := mainRuntime.Run(runCtx, agent.MainRunRequest{
+		AgentID:      runAgentID,
 		SessionKey:   sessionKey,
 		Prompt:       agentMessage,
-		SystemPrompt: "",
-		Workspace:    workspace,
+		SystemPrompt: runSystemPrompt,
+		Workspace:    runWorkspace,
 		Metadata: map[string]any{
-			"channel": agentChannel,
+			"channel":    channel,
+			"account_id": accountID,
+			"chat_id":    chatID,
 		},
 	})
 	if err != nil {
@@ -311,4 +372,34 @@ func deliverResponse(ctx context.Context, messageBus *bus.MessageBus, content st
 		Content:   content,
 		Timestamp: time.Now(),
 	})
+}
+
+func parseSessionKey(sessionKey string) (channel string, accountID string, chatID string) {
+	parts := strings.Split(strings.TrimSpace(sessionKey), ":")
+	switch {
+	case len(parts) >= 3:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(strings.Join(parts[2:], ":"))
+	case len(parts) == 2:
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "default"
+	case len(parts) == 1 && strings.TrimSpace(parts[0]) != "":
+		return "cli", "default", strings.TrimSpace(parts[0])
+	default:
+		return "cli", "default", "default"
+	}
+}
+
+func resolveAgentID(manager *agent.AgentManager, target *agent.Agent) string {
+	if manager == nil || target == nil {
+		return ""
+	}
+	for _, id := range manager.ListAgents() {
+		current, ok := manager.GetAgent(id)
+		if !ok {
+			continue
+		}
+		if current == target {
+			return id
+		}
+	}
+	return ""
 }

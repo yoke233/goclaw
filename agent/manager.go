@@ -149,7 +149,10 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 
 	logger.Info("Setting up agents from config")
 
-	// 1. 创建 Agent 实例
+	// 1. 先设置分身支持，确保 sessions_spawn 已注册（便于系统提示词感知真实工具集合）
+	m.setupSubagentSupport(cfg, contextBuilder)
+
+	// 2. 创建 Agent 实例
 	for _, agentCfg := range cfg.Agents.List {
 		if err := m.createAgent(agentCfg, contextBuilder, cfg); err != nil {
 			logger.Error("Failed to create agent",
@@ -159,7 +162,7 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 		}
 	}
 
-	// 2. 如果没有配置 Agent，创建默认 Agent
+	// 3. 如果没有配置 Agent，创建默认 Agent
 	if len(m.agents) == 0 {
 		logger.Info("No agents configured, creating default agent")
 		defaultAgentCfg := config.AgentConfig{
@@ -174,7 +177,7 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 		}
 	}
 
-	// 3. 设置绑定
+	// 4. 设置绑定
 	for _, binding := range cfg.Bindings {
 		if err := m.setupBinding(binding); err != nil {
 			logger.Error("Failed to setup binding",
@@ -184,9 +187,6 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 				zap.Error(err))
 		}
 	}
-
-	// 4. 设置分身支持
-	m.setupSubagentSupport(cfg, contextBuilder)
 
 	logger.Info("Agent manager setup complete",
 		zap.Int("agents", len(m.agents)),

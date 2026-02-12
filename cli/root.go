@@ -201,6 +201,7 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	// 创建工具注册表
 	toolRegistry := agent.NewToolRegistry()
+	contextBuilder.SetToolRegistry(toolRegistry)
 
 	// 注册 memory 工具
 	if searchMgr != nil {

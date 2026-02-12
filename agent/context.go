@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ const (
 type ContextBuilder struct {
 	memory    *MemoryStore
 	workspace string
+	tools     *ToolRegistry
 }
 
 // NewContextBuilder 创建上下文构建器
@@ -36,6 +38,11 @@ func NewContextBuilder(memory *MemoryStore, workspace string) *ContextBuilder {
 		memory:    memory,
 		workspace: workspace,
 	}
+}
+
+// SetToolRegistry sets the runtime tool registry used to render dynamic tool hints.
+func (b *ContextBuilder) SetToolRegistry(registry *ToolRegistry) {
+	b.tools = registry
 }
 
 // BuildSystemPrompt 构建系统提示词
@@ -125,24 +132,10 @@ func (b *ContextBuilder) buildIdentityAndTools() string {
 		"web_search":             "Search the web using API",
 		"web_fetch":              "Fetch web pages",
 		"use_skill":              "Load a specialized skill. SKILLS HAVE HIGHEST PRIORITY - always check Skills section first before using other tools",
+		"sessions_spawn":         "Spawn a background sub-agent run for concurrent execution and automatically announce results back to the requester session",
 	}
 
-	// 构建工具列表
-	toolOrder := []string{
-		"smart_search", "browser_navigate", "browser_screenshot", "browser_get_text",
-		"browser_click", "browser_fill_input", "browser_execute_script",
-		"read_file", "write_file", "list_files", "run_shell",
-		"web_search", "web_fetch", "use_skill",
-	}
-
-	var toolLines []string
-	for _, tool := range toolOrder {
-		if summary, ok := coreToolSummaries[tool]; ok {
-			toolLines = append(toolLines, fmt.Sprintf("- %s: %s", tool, summary))
-		} else {
-			toolLines = append(toolLines, fmt.Sprintf("- %s", tool))
-		}
-	}
+	toolLines := b.buildToolSummaryLines(coreToolSummaries)
 
 	return fmt.Sprintf(`# Identity
 
@@ -179,6 +172,82 @@ If a task is more complex or takes longer, use smart_search first, then browser 
 		now.Format("2006-01-02 15:04:05 MST"),
 		b.workspace,
 		strings.Join(toolLines, "\n"))
+}
+
+func (b *ContextBuilder) buildToolSummaryLines(coreToolSummaries map[string]string) []string {
+	defaultToolOrder := []string{
+		"smart_search", "browser_navigate", "browser_screenshot", "browser_get_text",
+		"browser_click", "browser_fill_input", "browser_execute_script",
+		"read_file", "write_file", "list_files", "run_shell",
+		"web_search", "web_fetch", "use_skill", "sessions_spawn",
+	}
+
+	if b.tools == nil {
+		lines := make([]string, 0, len(defaultToolOrder))
+		for _, toolName := range defaultToolOrder {
+			if summary, ok := coreToolSummaries[toolName]; ok && strings.TrimSpace(summary) != "" {
+				lines = append(lines, fmt.Sprintf("- %s: %s", toolName, summary))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- %s", toolName))
+		}
+		return lines
+	}
+
+	registered := b.tools.ListExisting()
+	if len(registered) == 0 {
+		return []string{"- (no tools registered)"}
+	}
+
+	toolByName := make(map[string]string, len(registered))
+	nameSet := make(map[string]struct{}, len(registered))
+	for _, tool := range registered {
+		if tool == nil {
+			continue
+		}
+		name := strings.TrimSpace(tool.Name())
+		if name == "" {
+			continue
+		}
+		if _, exists := nameSet[name]; exists {
+			continue
+		}
+		nameSet[name] = struct{}{}
+		toolByName[name] = strings.TrimSpace(tool.Description())
+	}
+
+	orderedNames := make([]string, 0, len(nameSet))
+	seen := make(map[string]struct{}, len(nameSet))
+	for _, name := range defaultToolOrder {
+		if _, ok := nameSet[name]; ok {
+			orderedNames = append(orderedNames, name)
+			seen[name] = struct{}{}
+		}
+	}
+
+	remaining := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		remaining = append(remaining, name)
+	}
+	sort.Strings(remaining)
+	orderedNames = append(orderedNames, remaining...)
+
+	lines := make([]string, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		summary := strings.TrimSpace(coreToolSummaries[name])
+		if summary == "" {
+			summary = strings.TrimSpace(toolByName[name])
+		}
+		if summary != "" {
+			lines = append(lines, fmt.Sprintf("- %s: %s", name, summary))
+		} else {
+			lines = append(lines, fmt.Sprintf("- %s", name))
+		}
+	}
+	return lines
 }
 
 // buildToolCallStyle 构建详细的工具调用风格指导
