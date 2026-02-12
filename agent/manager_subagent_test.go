@@ -8,7 +8,6 @@ import (
 	"time"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
-	taskstore "github.com/smallnest/goclaw/agent/tasks"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
 )
@@ -25,55 +24,31 @@ type mockSubagentRuntime struct {
 
 type mockTaskStore struct {
 	mu          sync.Mutex
-	statusByID  map[string]taskstore.TaskStatus
-	progressLog []taskstore.AppendProgressInput
+	statusByID  map[string]string
+	progressLog []TaskProgressInput
 	runToTask   map[string]string
 }
 
 func newMockTaskStore() *mockTaskStore {
 	return &mockTaskStore{
-		statusByID:  make(map[string]taskstore.TaskStatus),
-		progressLog: make([]taskstore.AppendProgressInput, 0),
+		statusByID:  make(map[string]string),
+		progressLog: make([]TaskProgressInput, 0),
 		runToTask:   make(map[string]string),
 	}
 }
 
-func (m *mockTaskStore) Close() error { return nil }
-
-func (m *mockTaskStore) CreateRequirement(title, description string) (*taskstore.Requirement, error) {
-	return nil, nil
-}
-
-func (m *mockTaskStore) CreateTask(input taskstore.CreateTaskInput) (*taskstore.Task, error) {
-	return nil, nil
-}
-
-func (m *mockTaskStore) AssignTaskRole(taskID, role, assignee string) error { return nil }
-
-func (m *mockTaskStore) UpdateTaskStatus(taskID string, status taskstore.TaskStatus) error {
+func (m *mockTaskStore) UpdateTaskStatus(taskID string, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statusByID[taskID] = status
 	return nil
 }
 
-func (m *mockTaskStore) AppendTaskProgress(input taskstore.AppendProgressInput) (*taskstore.TaskProgressEntry, error) {
+func (m *mockTaskStore) AppendTaskProgress(input TaskProgressInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.progressLog = append(m.progressLog, input)
-	return &taskstore.TaskProgressEntry{TaskID: input.TaskID, RunID: input.RunID, Status: input.Status, Message: input.Message}, nil
-}
-
-func (m *mockTaskStore) ListTasksByRequirement(requirementID string) ([]*taskstore.Task, error) {
-	return nil, nil
-}
-
-func (m *mockTaskStore) ListTaskProgress(taskID string, limit int) ([]*taskstore.TaskProgressEntry, error) {
-	return nil, nil
-}
-
-func (m *mockTaskStore) GetTaskBoardSummary(requirementID string) (*taskstore.TaskBoardSummary, error) {
-	return nil, nil
+	return nil
 }
 
 func (m *mockTaskStore) LinkSubagentRun(runID, taskID string) error {
@@ -218,7 +193,7 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 		linkedTaskID := taskStore.runToTask["run-1"]
 		taskStore.mu.Unlock()
 
-		if status == taskstore.StatusDone && progressCount >= 2 && linkedTaskID == "task-1" {
+		if status == taskStatusCompleted && progressCount >= 2 && linkedTaskID == "task-1" {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -9,6 +9,7 @@ import (
 
 	sdkapi "github.com/cexll/agentsdk-go/pkg/api"
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
+	sdktasks "github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	sdktool "github.com/cexll/agentsdk-go/pkg/tool"
 	agenttools "github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
@@ -19,6 +20,7 @@ type AgentSDKMainRuntimeOptions struct {
 	Config           *config.Config
 	Tools            *ToolRegistry
 	DefaultWorkspace string
+	TaskStore        sdktasks.Store
 }
 
 // AgentSDKMainRuntime implements MainRuntime via agentsdk-go.
@@ -26,6 +28,7 @@ type AgentSDKMainRuntime struct {
 	cfg              *config.Config
 	tools            *ToolRegistry
 	defaultWorkspace string
+	taskStore        sdktasks.Store
 
 	mu       sync.Mutex
 	runtimes map[string]*sdkRuntimeEntry
@@ -52,6 +55,7 @@ func NewAgentSDKMainRuntime(opts AgentSDKMainRuntimeOptions) (*AgentSDKMainRunti
 		cfg:              opts.Config,
 		tools:            opts.Tools,
 		defaultWorkspace: strings.TrimSpace(opts.DefaultWorkspace),
+		taskStore:        opts.TaskStore,
 		runtimes:         make(map[string]*sdkRuntimeEntry),
 	}, nil
 }
@@ -159,6 +163,7 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntime(ctx context.Context, req MainRu
 		MaxIterations: maxIterations,
 		MaxSessions:   1000,
 		Timeout:       runtimeTimeout,
+		TaskStore:     r.taskStore,
 		Tools:         buildAgentSDKTools(r.tools.ListExisting()),
 	})
 	if err != nil {

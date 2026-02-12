@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/smallnest/goclaw/agent"
+	tasksdk "github.com/smallnest/goclaw/agent/tasksdk"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/cli/input"
@@ -186,10 +187,18 @@ func runTUI(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	agentSDKTaskStore, err := tasksdk.NewSQLiteStore(filepath.Join(workspace, "data", "agentsdk_tasks.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize agentsdk task store: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = agentSDKTaskStore.Close() }()
+
 	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
 		DefaultWorkspace: workspace,
+		TaskStore:        agentSDKTaskStore,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create main runtime: %v\n", err)
@@ -197,15 +206,17 @@ func runTUI(cmd *cobra.Command, args []string) {
 	}
 	defer func() { _ = mainRuntime.Close() }()
 
-	// Always create a new session (unless explicitly specified)
-	var sess *session.Session
-	sessionKey := tuiSession
-	if sessionKey == "" {
-		// Always create a fresh session with timestamp
-		sessionKey = "tui:" + strconv.FormatInt(time.Now().Unix(), 10)
-	}
+	// Always create a new session unless --session 显式指定
+	sessionKey, _ := agent.ResolveSessionKey(agent.SessionKeyOptions{
+		Explicit:       tuiSession,
+		Channel:        "tui",
+		AccountID:      "tui",
+		ChatID:         "default",
+		FreshOnDefault: true,
+		Now:            time.Now(),
+	})
 
-	sess, err = sessionMgr.GetOrCreate(sessionKey)
+	sess, err := sessionMgr.GetOrCreate(sessionKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create session: %v\n", err)
 		os.Exit(1)

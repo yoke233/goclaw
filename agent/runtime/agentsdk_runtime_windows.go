@@ -6,21 +6,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	sdkapi "github.com/cexll/agentsdk-go/pkg/api"
+	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
+	sdkprompts "github.com/cexll/agentsdk-go/pkg/prompts"
 	"github.com/smallnest/goclaw/internal/logger"
-	"github.com/smallnest/goclaw/providers"
 	"go.uber.org/zap"
 )
 
 // AgentsdkRuntimeOptions 运行时初始化参数。
-// Windows 下由于上游 agentsdk-go 依赖的 syscall.O_NOFOLLOW 不可用，
-// 当前实现回退到 goclaw provider 执行，接口保持一致。
 type AgentsdkRuntimeOptions struct {
 	Pool             RolePool
 	AnthropicAPIKey  string
@@ -29,15 +28,17 @@ type AgentsdkRuntimeOptions struct {
 	Temperature      float64
 	MaxTokens        int
 	MaxIterations    int
-	FallbackProvider providers.Provider
 }
 
+// AgentsdkRuntime 为 sessions_spawn 提供独立执行能力。
 type AgentsdkRuntime struct {
-	pool        RolePool
-	provider    providers.Provider
-	modelName   string
-	temperature float64
-	maxTokens   int
+	pool             RolePool
+	anthropicAPIKey  string
+	anthropicBaseURL string
+	modelName        string
+	temperature      float64
+	maxTokens        int
+	maxIterations    int
 
 	mu   sync.RWMutex
 	runs map[string]*subagentRun
@@ -60,16 +61,18 @@ func NewAgentsdkRuntime(opts AgentsdkRuntimeOptions) *AgentsdkRuntime {
 	}
 
 	return &AgentsdkRuntime{
-		pool:        pool,
-		provider:    opts.FallbackProvider,
-		modelName:   normalizeModelName(strings.TrimSpace(opts.ModelName)),
-		temperature: opts.Temperature,
-		maxTokens:   opts.MaxTokens,
-		runs:        make(map[string]*subagentRun),
+		pool:             pool,
+		anthropicAPIKey:  strings.TrimSpace(opts.AnthropicAPIKey),
+		anthropicBaseURL: strings.TrimSpace(opts.AnthropicBaseURL),
+		modelName:        normalizeModelName(opts.ModelName),
+		temperature:      opts.Temperature,
+		maxTokens:        opts.MaxTokens,
+		maxIterations:    opts.MaxIterations,
+		runs:             make(map[string]*subagentRun),
 	}
 }
 
-func (r *AgentsdkRuntime) Spawn(_ context.Context, req SubagentRunRequest) (string, error) {
+func (r *AgentsdkRuntime) Spawn(ctx context.Context, req SubagentRunRequest) (string, error) {
 	if strings.TrimSpace(req.RunID) == "" {
 		return "", fmt.Errorf("run id is required")
 	}
@@ -168,12 +171,12 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		return
 	}
 
-	skillsPrompt, warn := loadRoleSkills(run.req.SkillsDir)
-	if warn != "" {
+	skillsRegs, hookRegs, warnings := loadRoleRegistrations(run.req.SkillsDir)
+	for _, warning := range warnings {
 		logger.Warn("Subagent skills warning",
 			zap.String("run_id", runID),
 			zap.String("skills_dir", run.req.SkillsDir),
-			zap.String("warning", warn))
+			zap.String("warning", warning))
 	}
 
 	timeoutSeconds := run.req.TimeoutSeconds
@@ -183,44 +186,66 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	if r.provider == nil {
+	modelName := normalizeModelName(r.modelName)
+	if modelName == "" {
+		modelName = "claude-sonnet-4-5"
+	}
+
+	var tempPtr *float64
+	if r.temperature > 0 {
+		t := r.temperature
+		tempPtr = &t
+	}
+
+	modelProvider := &sdkmodel.AnthropicProvider{
+		APIKey:      strings.TrimSpace(r.anthropicAPIKey),
+		BaseURL:     strings.TrimSpace(r.anthropicBaseURL),
+		ModelName:   modelName,
+		MaxTokens:   r.maxTokens,
+		Temperature: tempPtr,
+	}
+
+	maxIterations := r.maxIterations
+	if maxIterations <= 0 {
+		maxIterations = 15
+	}
+
+	rt, err := sdkapi.New(ctx, sdkapi.Options{
+		ProjectRoot:   run.req.WorkDir,
+		ModelFactory:  modelProvider,
+		SystemPrompt:  strings.TrimSpace(run.req.SystemPrompt),
+		Skills:        skillsRegs,
+		TypedHooks:    hookRegs,
+		MaxIterations: maxIterations,
+		Timeout:       time.Duration(timeoutSeconds) * time.Second,
+	})
+	if err != nil {
+		status := RunStatusError
+		errMsg := fmt.Sprintf("failed to initialize agentsdk runtime: %v", err)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = RunStatusTimeout
+			errMsg = "subagent runtime initialization timed out"
+		}
 		run.result = &SubagentRunResult{
-			Status:   RunStatusError,
-			ErrorMsg: "fallback provider is nil",
+			Status:   status,
+			ErrorMsg: errMsg,
 		}
 		return
 	}
-
-	systemPrompt := strings.TrimSpace(run.req.SystemPrompt)
-	if skillsPrompt != "" {
-		if systemPrompt != "" {
-			systemPrompt += "\n\n"
-		}
-		systemPrompt += skillsPrompt
-	}
+	defer rt.Close()
 
 	reqTask := strings.TrimSpace(StripRolePrefix(run.req.Task))
 	if reqTask == "" {
 		reqTask = strings.TrimSpace(run.req.Task)
 	}
 
-	messages := []providers.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: reqTask},
-	}
-
-	options := []providers.ChatOption{}
-	if r.modelName != "" {
-		options = append(options, providers.WithModel(r.modelName))
-	}
-	if r.temperature > 0 {
-		options = append(options, providers.WithTemperature(r.temperature))
-	}
-	if r.maxTokens > 0 {
-		options = append(options, providers.WithMaxTokens(r.maxTokens))
-	}
-
-	resp, err := r.provider.Chat(ctx, messages, nil, options...)
+	resp, err := rt.Run(ctx, sdkapi.Request{
+		Prompt:    reqTask,
+		SessionID: run.req.RunID,
+		Metadata: map[string]any{
+			"role": NormalizeRole(run.req.Role),
+		},
+	})
 	if err != nil {
 		status := RunStatusError
 		errMsg := err.Error()
@@ -237,12 +262,25 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		return
 	}
 
-	output := strings.TrimSpace(resp.Content)
-	if warn != "" {
+	output := ""
+	if resp != nil && resp.Result != nil {
+		output = strings.TrimSpace(resp.Result.Output)
+	}
+	if output == "" && resp != nil && resp.Subagent != nil {
+		switch v := resp.Subagent.Output.(type) {
+		case string:
+			output = strings.TrimSpace(v)
+		case nil:
+		default:
+			output = strings.TrimSpace(fmt.Sprintf("%v", v))
+		}
+	}
+	if len(warnings) > 0 {
+		warnText := strings.Join(warnings, "\n")
 		if output == "" {
-			output = warn
+			output = warnText
 		} else {
-			output += "\n\n" + warn
+			output += "\n\n" + warnText
 		}
 	}
 
@@ -252,70 +290,44 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	}
 }
 
-func loadRoleSkills(skillsDir string) (string, string) {
+func loadRoleRegistrations(skillsDir string) ([]sdkapi.SkillRegistration, []corehooks.ShellHook, []string) {
 	if strings.TrimSpace(skillsDir) == "" {
-		return "", "skills directory is empty"
+		return nil, nil, []string{"skills directory is empty"}
 	}
 
 	stat, err := os.Stat(skillsDir)
 	if err != nil {
-		return "", fmt.Sprintf("skills directory missing: %s", skillsDir)
+		return nil, nil, []string{fmt.Sprintf("skills directory missing: %s", skillsDir)}
 	}
 	if !stat.IsDir() {
-		return "", fmt.Sprintf("skills path is not a directory: %s", skillsDir)
+		return nil, nil, []string{fmt.Sprintf("skills path is not a directory: %s", skillsDir)}
 	}
 
-	var snippets []string
-	stopErr := errors.New("stop walk")
-	walkErr := filepath.WalkDir(skillsDir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.EqualFold(d.Name(), "SKILL.md") {
-			return nil
-		}
-
-		content, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		title := filepath.Base(filepath.Dir(path))
-		snippet := truncateText(strings.TrimSpace(string(content)), 1200)
-		snippets = append(snippets, fmt.Sprintf("### %s\n%s", title, snippet))
-
-		if len(snippets) >= 3 {
-			return stopErr
-		}
-		return nil
+	builtins := sdkprompts.ParseWithOptions(os.DirFS(skillsDir), sdkprompts.ParseOptions{
+		SkillsDir:    ".",
+		CommandsDir:  "__none__",
+		SubagentsDir: "__none__",
+		HooksDir:     "__none__",
 	})
 
-	if walkErr != nil && !errors.Is(walkErr, stopErr) {
-		return "", fmt.Sprintf("failed to load skills: %v", walkErr)
+	warnings := make([]string, 0, len(builtins.Errors)+1)
+	for _, parseErr := range builtins.Errors {
+		if parseErr != nil {
+			warnings = append(warnings, fmt.Sprintf("skills parse warning: %v", parseErr))
+		}
 	}
-	if len(snippets) == 0 {
-		return "", fmt.Sprintf("no SKILL.md found under: %s", skillsDir)
+	if len(builtins.Skills) == 0 {
+		warnings = append(warnings, fmt.Sprintf("no SKILL.md found under: %s", skillsDir))
 	}
 
-	prompt := strings.Join([]string{
-		"## Role Skills",
-		"Use the following role skills when they are relevant to the task:",
-		strings.Join(snippets, "\n\n"),
-	}, "\n\n")
-	return prompt, ""
-}
-
-func truncateText(s string, limit int) string {
-	if limit <= 0 {
-		return ""
+	regs := make([]sdkapi.SkillRegistration, 0, len(builtins.Skills))
+	for _, entry := range builtins.Skills {
+		regs = append(regs, sdkapi.SkillRegistration{
+			Definition: entry.Definition,
+			Handler:    entry.Handler,
+		})
 	}
-	runes := []rune(s)
-	if len(runes) <= limit {
-		return s
-	}
-	return string(runes[:limit]) + "..."
+	return regs, builtins.Hooks, warnings
 }
 
 func normalizeModelName(raw string) string {

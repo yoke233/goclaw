@@ -1,19 +1,20 @@
 # agentsdk-go 集成需求说明
 
+> 状态说明：本文档为阶段 1 需求草案。主链路迁移已完成，实际落地请以 `docs/requirements/main-agentsdk-full-migration-plan.md` 为准。
+
 ## 背景
-当前 `goclaw` 的 `sessions_spawn` 分身链路尚未闭环，且分身工具的上下文、技能与工作目录隔离能力不足。目标是引入 `agentsdk-go` 作为“分身执行运行时”，以获得完整的 agent 流程、skills 与 hooks 能力，并在不破坏现有通道/消息总线的前提下接管 subagent 执行。
+目标是引入 `agentsdk-go` 作为执行运行时，以获得完整的 agent 流程、skills 与 hooks 能力，并在不破坏现有通道/消息总线的前提下接管主/分身执行。
 
 ## 目标
 1. **进程内集成** `agentsdk-go`，用于执行 subagent（分身）任务。
 2. **按角色共享技能目录**：`workspace/skills/<role>`。
 3. **每个 subagent 独立工作目录**：`workspace/subagents/<run_id>/workspace`。
 4. **分身状态可追踪**：run 进度与结果写入 `subagent_registry`，并可回传主会话。
-5. **并发控制**：前端 5 并发、后端 4 并发（可配置）。
+5. **并发控制**：按角色配置并发上限（`role_max_concurrent`，可扩展）。
 
 ## 非目标（阶段 1）
-1. 主 Agent 仍使用 goclaw 内置 orchestrator，不切换到 agentsdk-go。
-2. 不改现有通道与 bus 结构。
-3. 不引入外部服务部署（仅进程内 SDK）。
+1. 不改现有通道与 bus 结构。
+2. 不引入外部服务部署（仅进程内 SDK）。
 
 ## 设计决策
 - 集成方式：进程内 SDK。
@@ -34,8 +35,11 @@
   "agents": {
     "defaults": {
       "subagents": {
-        "runtime": "agentsdk",            // goclaw|agentsdk
         "max_concurrent": 8,
+        "role_max_concurrent": {
+          "frontend": 5,
+          "backend": 4
+        },
         "archive_after_minutes": 60,
         "timeout_seconds": 900,
         "skills_role_dir": "skills",      // 基于 workspace 的相对路径
@@ -58,12 +62,10 @@
    - 触发 `subagentAnnouncer` 通知主会话
 
 ## 角色与并发模型
-- 支持角色：`frontend`、`backend`（可扩展 `qa`/`devops`）
-- 并发池按角色限制：
-  - frontend: 5
-  - backend: 4
+- 支持角色：开放集合，默认可使用 `frontend`、`backend`，并可扩展 `qa`/`devops` 等。
+- 并发池按 `role_max_concurrent` 限制，未配置角色走 `max_concurrent` 默认上限。
 - 角色来源：
-  - `sessions_spawn` 参数 `label` 前缀或 `task` 约定标记，例如：`[frontend]`、`[backend]`
+  - `sessions_spawn` 参数 `label` 前缀或 `task` 约定标记，例如：`[frontend]`、`[qa]`
   - 若无标记，默认 `backend`
 
 ## agentsdk-go 接入抽象（建议接口）
@@ -111,7 +113,7 @@ type SubagentRunResult struct {
 3. `cli/root.go`
    - 初始化 runtime 适配器（如果放在 AgentManager 中则只需传入配置）
 4. `config/schema.go`
-   - 添加 subagent runtime 与目录配置字段
+   - 添加 role 并发与目录配置字段
 5. `agent/runtime/agentsdk_runtime.go`（新增）
    - 封装 agentsdk-go 执行
 

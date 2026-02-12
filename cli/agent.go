@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/smallnest/goclaw/agent"
+	tasksdk "github.com/smallnest/goclaw/agent/tasksdk"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
@@ -190,11 +192,19 @@ func runAgent(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to register use_skill: %v\n", err)
 	}
 
+	agentSDKTaskStore, err := tasksdk.NewSQLiteStore(filepath.Join(workspace, "data", "agentsdk_tasks.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize agentsdk task store: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = agentSDKTaskStore.Close() }()
+
 	// Create main runtime
 	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
 		DefaultWorkspace: workspace,
+		TaskStore:        agentSDKTaskStore,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create main runtime: %v\n", err)
@@ -207,10 +217,14 @@ func runAgent(cmd *cobra.Command, args []string) {
 	defer cancel()
 
 	// Determine session key
-	sessionKey := agentSessionID
-	if sessionKey == "" {
-		sessionKey = agentChannel + ":default"
-	}
+	sessionKey, _ := agent.ResolveSessionKey(agent.SessionKeyOptions{
+		Explicit:       agentSessionID,
+		Channel:        agentChannel,
+		AccountID:      "agent",
+		ChatID:         "default",
+		FreshOnDefault: true,
+		Now:            time.Now(),
+	})
 
 	// Get or create session
 	sess, err := sessionMgr.GetOrCreate(sessionKey)

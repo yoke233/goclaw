@@ -9,10 +9,11 @@
       "temperature": 0.7,
       "max_tokens": 4096,
       "subagents": {
-        "runtime": "agentsdk",
         "max_concurrent": 8,
-        "frontend_max_concurrent": 5,
-        "backend_max_concurrent": 4,
+        "role_max_concurrent": {
+          "frontend": 5,
+          "backend": 4
+        },
         "archive_after_minutes": 60,
         "timeout_seconds": 900,
         "skills_role_dir": "skills",

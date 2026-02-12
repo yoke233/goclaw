@@ -16,6 +16,12 @@ func TestParseRole(t *testing.T) {
 			want:  RoleFrontend,
 		},
 		{
+			name:  "custom role from label",
+			task:  "[backend] implement api",
+			label: "[qa] verify cases",
+			want:  "qa",
+		},
+		{
 			name:  "task backend",
 			task:  "[backend] implement api",
 			label: "",
@@ -56,6 +62,16 @@ func TestStripRolePrefix(t *testing.T) {
 			want: "build user api",
 		},
 		{
+			name: "strip custom role",
+			task: "[devops] configure ci",
+			want: "configure ci",
+		},
+		{
+			name: "invalid role format keeps original",
+			task: "[qa team] check regression",
+			want: "[qa team] check regression",
+		},
+		{
 			name: "keep untouched",
 			task: "plain task",
 			want: "plain task",
@@ -80,7 +96,10 @@ func TestNormalizeRole(t *testing.T) {
 		{in: "frontend", want: RoleFrontend},
 		{in: "backend", want: RoleBackend},
 		{in: " FRONTEND ", want: RoleFrontend},
-		{in: "unknown", want: RoleBackend},
+		{in: "unknown", want: "unknown"},
+		{in: "devops-team", want: "devops-team"},
+		{in: "qa_team", want: "qa_team"},
+		{in: "qa team", want: RoleBackend},
 		{in: "", want: RoleBackend},
 	}
 

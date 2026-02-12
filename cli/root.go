@@ -9,7 +9,7 @@ import (
 	"syscall"
 
 	"github.com/smallnest/goclaw/agent"
-	taskstore "github.com/smallnest/goclaw/agent/tasks"
+	tasksdk "github.com/smallnest/goclaw/agent/tasksdk"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/channels"
@@ -173,7 +173,11 @@ func runStart(cmd *cobra.Command, args []string) {
 	defer messageBus.Close()
 
 	// 创建会话管理器
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		logger.Fatal("Failed to get user home directory", zap.Error(err))
+	}
+	sessionDir := filepath.Join(homeDir, ".goclaw", "sessions")
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		logger.Fatal("Failed to create session manager", zap.Error(err))
@@ -284,11 +288,21 @@ func runStart(cmd *cobra.Command, args []string) {
 		logger.Info("Browser tools registered")
 	}
 
+	// 初始化 agentsdk task store（持久化）
+	agentSDKTaskDBPath := filepath.Join(workspaceDir, "data", "agentsdk_tasks.db")
+	agentSDKTaskStore, err := tasksdk.NewSQLiteStore(agentSDKTaskDBPath)
+	if err != nil {
+		logger.Fatal("Failed to initialize agentsdk task store", zap.Error(err))
+	}
+	defer func() { _ = agentSDKTaskStore.Close() }()
+	logger.Info("AgentSDK task store initialized", zap.String("path", agentSDKTaskDBPath))
+
 	// 初始化主执行运行时（agentsdk 主链路）
 	mainRuntime, err := agent.NewAgentSDKMainRuntime(agent.AgentSDKMainRuntimeOptions{
 		Config:           cfg,
 		Tools:            toolRegistry,
 		DefaultWorkspace: workspaceDir,
+		TaskStore:        agentSDKTaskStore,
 	})
 	if err != nil {
 		logger.Fatal("Failed to initialize main runtime", zap.Error(err))
@@ -322,31 +336,29 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 创建调度器
 	scheduler := cron.NewScheduler(messageBus, provider, sessionMgr)
 
-	// 初始化任务存储
-	taskDBPath := filepath.Join(workspaceDir, "data", "tasks.db")
-	taskStore, err := taskstore.NewSQLiteStore(taskDBPath)
+	// 初始化 subagent 任务追踪器（run 映射/进度日志）
+	taskTrackerDBPath := filepath.Join(workspaceDir, "data", "subagent_task_tracker.db")
+	taskTracker, err := tasksdk.NewTracker(agentSDKTaskStore, taskTrackerDBPath)
 	if err != nil {
-		logger.Warn("Failed to initialize task store", zap.Error(err))
-	} else {
-		defer func() { _ = taskStore.Close() }()
-		logger.Info("Task store initialized", zap.String("path", taskDBPath))
+		logger.Fatal("Failed to initialize task tracker", zap.Error(err))
 	}
+	defer func() { _ = taskTracker.Close() }()
+	logger.Info("Task tracker initialized", zap.String("path", taskTrackerDBPath))
 
 	// 初始化分身运行时（支持 runtime 配置切换）
-	subagentRuntime, runtimeMode := buildSubagentRuntime(cfg, provider)
+	subagentRuntime, runtimeMode := buildSubagentRuntime(cfg)
 	logger.Info("Subagent runtime initialized", zap.String("runtime_mode", runtimeMode))
 
 	// 创建 AgentManager
 	agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
 		Bus:             messageBus,
-		Provider:        provider,
 		SessionMgr:      sessionMgr,
 		Tools:           toolRegistry,
 		DataDir:         workspaceDir, // 使用 workspace 作为数据目录
 		Workspace:       workspaceDir,
 		SubagentRuntime: subagentRuntime,
 		MainRuntime:     mainRuntime,
-		TaskStore:       taskStore,
+		TaskStore:       taskTracker,
 	})
 
 	// 从配置设置 Agent 和绑定

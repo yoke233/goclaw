@@ -22,23 +22,11 @@ New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 $env:GOSKILLS_WORKSPACE_PATH = $workspace
 
 Write-Host "`n[3/4] Task command smoke"
-$reqOutput = go run . task requirement --title "E2E requirement" --description "validate task workflow"
-if ($LASTEXITCODE -ne 0) {
-    throw "task requirement command failed"
-}
-Write-Host $reqOutput
-
-$reqId = ""
-foreach ($line in $reqOutput) {
-    if ($line -match "ID:\s+(.+)$") {
-        $reqId = $matches[1].Trim()
-    }
-}
-if ([string]::IsNullOrWhiteSpace($reqId)) {
-    throw "failed to parse requirement id from output"
-}
-
-$taskOutput = go run . task create --requirement $reqId --title "E2E task" --role frontend --acceptance "task can move to done"
+$taskOutput = go run . task create `
+    --subject "E2E task" `
+    --active-form "deliver e2e task" `
+    --description "validate task workflow" `
+    --acceptance "task can move to completed"
 if ($LASTEXITCODE -ne 0) {
     throw "task create command failed"
 }
@@ -54,27 +42,27 @@ if ([string]::IsNullOrWhiteSpace($taskId)) {
     throw "failed to parse task id from output"
 }
 
-go run . task assign $taskId --role frontend --assignee "qa-user"
+go run . task assign $taskId --assignee "qa-user"
 if ($LASTEXITCODE -ne 0) {
     throw "task assign command failed"
 }
 
-go run . task status $taskId --status doing --message "smoke started"
+go run . task status $taskId --status in_progress --message "smoke started"
 if ($LASTEXITCODE -ne 0) {
     throw "task status command failed"
 }
 
-go run . task progress $taskId --status doing --message "smoke progress entry"
+go run . task progress $taskId --status in_progress --message "smoke progress entry"
 if ($LASTEXITCODE -ne 0) {
     throw "task progress command failed"
 }
 
-go run . task status $taskId --status done --message "smoke finished"
+go run . task status $taskId --status completed --message "smoke finished"
 if ($LASTEXITCODE -ne 0) {
     throw "task final status command failed"
 }
 
-$listOutput = go run . task list --requirement $reqId --with-progress --progress-limit 5
+$listOutput = go run . task list --with-progress --progress-limit 5
 if ($LASTEXITCODE -ne 0) {
     throw "task list command failed"
 }
@@ -92,4 +80,3 @@ if ($WithLiveSubagent) {
 Write-Host "`nE2E smoke passed."
 Write-Host ("Workspace: " + $workspace)
 Write-Host ("End: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
-

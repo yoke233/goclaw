@@ -3,9 +3,6 @@ package agent
 import (
 	"context"
 	"time"
-
-	"github.com/smallnest/goclaw/providers"
-	"github.com/smallnest/goclaw/session"
 )
 
 // MessageRole represents the role of a message
@@ -34,7 +31,7 @@ func (t TextContent) ContentType() string {
 
 // ImageContent represents image content
 type ImageContent struct {
-	URL     string `json:"url,omitempty"`
+	URL      string `json:"url,omitempty"`
 	Data     string `json:"data,omitempty"` // base64
 	MimeType string `json:"mimeType,omitempty"`
 }
@@ -45,8 +42,8 @@ func (i ImageContent) ContentType() string {
 
 // ToolCallContent represents a tool call from assistant
 type ToolCallContent struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }
 
@@ -66,17 +63,17 @@ func (t ThinkingContent) ContentType() string {
 // AgentMessage represents a message in the agent conversation (renamed to avoid conflict with context.go)
 type AgentMessage struct {
 	ID        string         `json:"id,omitempty"`
-	Role      MessageRole     `json:"role"`
+	Role      MessageRole    `json:"role"`
 	Content   []ContentBlock `json:"content"`
-	Timestamp int64           `json:"timestamp,omitempty"`
-	Metadata  map[string]any  `json:"metadata,omitempty"`
+	Timestamp int64          `json:"timestamp,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
 	Content []ContentBlock `json:"content"`
 	Details map[string]any `json:"details"`
-	Error   error           `json:"error,omitempty"`
+	Error   error          `json:"error,omitempty"`
 }
 
 // Tool represents an executable tool
@@ -91,7 +88,7 @@ type Tool interface {
 
 // AgentState represents the current state of the agent
 type AgentState struct {
-	SystemPrompt   string
+	SystemPrompt  string
 	Model         string
 	Provider      string
 	ThinkingLevel string // off, minimal, low, medium, high, xhigh
@@ -102,7 +99,7 @@ type AgentState struct {
 	Error         error
 
 	// Queues for message injection (inspired by pi-mono)
-	SteeringQueue  []AgentMessage
+	SteeringQueue []AgentMessage
 	FollowUpQueue []AgentMessage
 
 	// Session key
@@ -113,57 +110,40 @@ type AgentState struct {
 type EventType string
 
 const (
-	EventAgentStart         EventType = "agent_start"
-	EventAgentEnd           EventType = "agent_end"
-	EventTurnStart          EventType = "turn_start"
-	EventTurnEnd            EventType = "turn_end"
-	EventMessageStart       EventType = "message_start"
-	EventMessageUpdate      EventType = "message_update"
-	EventMessageEnd         EventType = "message_end"
-	EventToolExecutionStart EventType = "tool_execution_start"
+	EventAgentStart          EventType = "agent_start"
+	EventAgentEnd            EventType = "agent_end"
+	EventTurnStart           EventType = "turn_start"
+	EventTurnEnd             EventType = "turn_end"
+	EventMessageStart        EventType = "message_start"
+	EventMessageUpdate       EventType = "message_update"
+	EventMessageEnd          EventType = "message_end"
+	EventToolExecutionStart  EventType = "tool_execution_start"
 	EventToolExecutionUpdate EventType = "tool_execution_update"
-	EventToolExecutionEnd   EventType = "tool_execution_end"
+	EventToolExecutionEnd    EventType = "tool_execution_end"
 )
 
 // Event represents an event from the agent
 type Event struct {
-	Type      EventType       `json:"type"`
-	Message   *Message         `json:"message,omitempty"`
-	Timestamp int64            `json:"timestamp"`
+	Type      EventType `json:"type"`
+	Message   *Message  `json:"message,omitempty"`
+	Timestamp int64     `json:"timestamp"`
 	// Tool execution fields
-	ToolID       string     `json:"tool_id,omitempty"`
-	ToolName    string     `json:"tool_name,omitempty"`
-	ToolArgs     map[string]any `json:"tool_args,omitempty"`
-	ToolResult   *ToolResult `json:"tool_result,omitempty"`
-	ToolError    bool       `json:"tool_error,omitempty"`
+	ToolID     string         `json:"tool_id,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	ToolArgs   map[string]any `json:"tool_args,omitempty"`
+	ToolResult *ToolResult    `json:"tool_result,omitempty"`
+	ToolError  bool           `json:"tool_error,omitempty"`
 	// Turn end fields
-	StopReason   string     `json:"stop_reason,omitempty"`
+	StopReason    string         `json:"stop_reason,omitempty"`
 	FinalMessages []AgentMessage `json:"final_messages,omitempty"`
-}
-
-// LoopConfig contains configuration for the agent loop
-type LoopConfig struct {
-	Model           string
-	Provider        providers.Provider
-	SessionMgr      *session.Manager
-	MaxIterations   int
-	SessionID       string
-
-	// Hooks for message transformation
-	ConvertToLLM     func([]AgentMessage) ([]providers.Message, error)
-	TransformContext func([]AgentMessage) ([]AgentMessage, error)
-
-	// Queues for message injection
-	GetSteeringMessages  func() ([]AgentMessage, error)
-	GetFollowUpMessages func() ([]AgentMessage, error)
 }
 
 // NewAgentState creates a new agent state
 func NewAgentState() *AgentState {
 	return &AgentState{
-		Tools:        make([]Tool, 0),
-		Messages:     make([]AgentMessage, 0),
-		PendingTools: make(map[string]bool),
+		Tools:         make([]Tool, 0),
+		Messages:      make([]AgentMessage, 0),
+		PendingTools:  make(map[string]bool),
 		SteeringQueue: make([]AgentMessage, 0),
 		FollowUpQueue: make([]AgentMessage, 0),
 	}
@@ -261,7 +241,7 @@ func (s *AgentState) Clone() *AgentState {
 	}
 
 	return &AgentState{
-		SystemPrompt:   s.SystemPrompt,
+		SystemPrompt:  s.SystemPrompt,
 		Model:         s.Model,
 		Provider:      s.Provider,
 		ThinkingLevel: s.ThinkingLevel,
@@ -270,8 +250,8 @@ func (s *AgentState) Clone() *AgentState {
 		IsStreaming:   s.IsStreaming,
 		PendingTools:  pendingTools,
 		Error:         s.Error,
-		SteeringQueue:  steering,
-		FollowUpQueue:  followUp,
+		SteeringQueue: steering,
+		FollowUpQueue: followUp,
 		SessionKey:    s.SessionKey,
 	}
 }

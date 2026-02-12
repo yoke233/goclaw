@@ -1,5 +1,10 @@
 # GoClaw Agent Architecture Design
 
+> Status (2026-02-12): This document is a pre-migration design snapshot.
+> Current runtime implementation is based on AgentSDK. Refer to
+> `docs/requirements/main-agentsdk-full-migration-plan.md` and
+> `docs/requirements/agentsdk-integration-implementation.md` for the active architecture.
+
 ## Executive Summary
 
 This document synthesizes the architectural patterns from **pi-mono** (TypeScript) and **openclaw** (TypeScript) implementations to design a new, idiomatic Go agent architecture for goclaw.

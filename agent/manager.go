@@ -10,12 +10,10 @@ import (
 	"time"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
-	taskstore "github.com/smallnest/goclaw/agent/tasks"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
-	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"go.uber.org/zap"
 )
@@ -27,7 +25,6 @@ type AgentManager struct {
 	defaultAgent   *Agent                   // 默认 Agent
 	bus            *bus.MessageBus
 	sessionMgr     *session.Manager
-	provider       providers.Provider
 	tools          *ToolRegistry
 	mu             sync.RWMutex
 	cfg            *config.Config
@@ -37,9 +34,31 @@ type AgentManager struct {
 	subagentAnnouncer *SubagentAnnouncer
 	subagentRuntime   agentruntime.SubagentRuntime
 	mainRuntime       MainRuntime
-	taskStore         taskstore.Store
+	taskStore         TaskTracker
 	dataDir           string
 	workspace         string
+}
+
+const (
+	taskStatusInProgress = "in_progress"
+	taskStatusCompleted  = "completed"
+	taskStatusBlocked    = "blocked"
+)
+
+// TaskProgressInput describes a subagent progress append operation.
+type TaskProgressInput struct {
+	TaskID  string
+	RunID   string
+	Status  string
+	Message string
+}
+
+// TaskTracker stores task/run mappings and status/progress updates for subagent execution.
+type TaskTracker interface {
+	LinkSubagentRun(runID, taskID string) error
+	ResolveTaskByRun(runID string) (string, error)
+	UpdateTaskStatus(taskID string, status string) error
+	AppendTaskProgress(input TaskProgressInput) error
 }
 
 // BindingEntry Agent 绑定条目
@@ -53,14 +72,13 @@ type BindingEntry struct {
 // NewAgentManagerConfig AgentManager 配置
 type NewAgentManagerConfig struct {
 	Bus             *bus.MessageBus
-	Provider        providers.Provider
 	SessionMgr      *session.Manager
 	Tools           *ToolRegistry
 	DataDir         string // 数据目录，用于存储分身注册表
 	Workspace       string
 	SubagentRuntime agentruntime.SubagentRuntime
 	MainRuntime     MainRuntime
-	TaskStore       taskstore.Store
+	TaskStore       TaskTracker
 }
 
 // NewAgentManager 创建 Agent 管理器
@@ -76,7 +94,6 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 		bindings:          make(map[string]*BindingEntry),
 		bus:               cfg.Bus,
 		sessionMgr:        cfg.SessionMgr,
-		provider:          cfg.Provider,
 		tools:             cfg.Tools,
 		subagentRegistry:  subagentRegistry,
 		subagentAnnouncer: subagentAnnouncer,
@@ -355,16 +372,16 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 				zap.String("task_id", taskID),
 				zap.Error(err))
 		}
-		if err := m.taskStore.UpdateTaskStatus(taskID, taskstore.StatusDoing); err != nil {
+		if err := m.taskStore.UpdateTaskStatus(taskID, taskStatusInProgress); err != nil {
 			logger.Warn("Failed to update task status to doing",
 				zap.String("run_id", record.RunID),
 				zap.String("task_id", taskID),
 				zap.Error(err))
 		}
-		if _, err := m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+		if err := m.taskStore.AppendTaskProgress(TaskProgressInput{
 			TaskID:  taskID,
 			RunID:   record.RunID,
-			Status:  string(taskstore.StatusDoing),
+			Status:  taskStatusInProgress,
 			Message: fmt.Sprintf("subagent started (role=%s, timeout=%ds)", role, timeoutSeconds),
 		}); err != nil {
 			logger.Warn("Failed to append task progress for subagent start",
@@ -382,11 +399,11 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 		}, &endedAt)
 		if m.taskStore != nil && strings.TrimSpace(record.TaskID) != "" {
 			taskID := strings.TrimSpace(record.TaskID)
-			_ = m.taskStore.UpdateTaskStatus(taskID, taskstore.StatusBlocked)
-			_, _ = m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+			_ = m.taskStore.UpdateTaskStatus(taskID, taskStatusBlocked)
+			_ = m.taskStore.AppendTaskProgress(TaskProgressInput{
 				TaskID:  taskID,
 				RunID:   record.RunID,
-				Status:  string(taskstore.StatusBlocked),
+				Status:  taskStatusBlocked,
 				Message: fmt.Sprintf("subagent failed to start: %v", err),
 			})
 		}
@@ -478,14 +495,14 @@ func (m *AgentManager) waitSubagentResult(runID string) {
 		return
 	}
 
-	nextStatus := taskstore.StatusBlocked
+	nextStatus := taskStatusBlocked
 	switch outcome.Status {
 	case agentruntime.RunStatusOK:
-		nextStatus = taskstore.StatusDone
+		nextStatus = taskStatusCompleted
 	case agentruntime.RunStatusTimeout:
-		nextStatus = taskstore.StatusBlocked
+		nextStatus = taskStatusBlocked
 	case agentruntime.RunStatusError:
-		nextStatus = taskstore.StatusBlocked
+		nextStatus = taskStatusBlocked
 	}
 
 	if err := m.taskStore.UpdateTaskStatus(taskID, nextStatus); err != nil {
@@ -503,7 +520,7 @@ func (m *AgentManager) waitSubagentResult(runID string) {
 		progressMsg = "subagent finished with no output"
 	}
 
-	if _, err := m.taskStore.AppendTaskProgress(taskstore.AppendProgressInput{
+	if err := m.taskStore.AppendTaskProgress(TaskProgressInput{
 		TaskID:  taskID,
 		RunID:   runID,
 		Status:  outcome.Status,
@@ -586,7 +603,6 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 	// 创建 Agent
 	agent, err := NewAgent(&NewAgentConfig{
 		Bus:          m.bus,
-		Provider:     m.provider,
 		SessionMgr:   m.sessionMgr,
 		Tools:        m.tools,
 		Context:      contextBuilder,
@@ -697,10 +713,15 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		zap.String("account_id", msg.AccountID),
 		zap.String("chat_id", msg.ChatID))
 
-	// 生成会话键（包含 account_id 以区分不同账号的消息）
-	sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
-	if msg.ChatID == "default" || msg.ChatID == "" {
-		sessionKey = fmt.Sprintf("%s:%s:%d", msg.Channel, msg.AccountID, msg.Timestamp.Unix())
+	// 生成会话键（显式 chat 会复用，默认 chat 自动生成新会话）
+	sessionKey, fresh := ResolveSessionKey(SessionKeyOptions{
+		Channel:        msg.Channel,
+		AccountID:      msg.AccountID,
+		ChatID:         msg.ChatID,
+		FreshOnDefault: true,
+		Now:            msg.Timestamp,
+	})
+	if fresh {
 		logger.Info("Creating fresh session", zap.String("session_key", sessionKey))
 	}
 
@@ -736,59 +757,53 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	ctx = context.WithValue(ctx, agentruntime.CtxAccountID, strings.TrimSpace(msg.AccountID))
 	ctx = context.WithValue(ctx, agentruntime.CtxChatID, strings.TrimSpace(msg.ChatID))
 
-	finalMessages := []AgentMessage{}
-	if m.mainRuntime != nil {
-		media := make([]MainRunMedia, 0, len(msg.Media))
-		for _, item := range msg.Media {
-			media = append(media, MainRunMedia{
-				Type:     item.Type,
-				URL:      item.URL,
-				Base64:   item.Base64,
-				MimeType: item.MimeType,
-			})
-		}
+	if m.mainRuntime == nil {
+		return fmt.Errorf("main runtime is not configured")
+	}
 
-		runResp, runErr := m.mainRuntime.Run(ctx, MainRunRequest{
-			AgentID:      strings.TrimSpace(agentID),
-			SessionKey:   sessionKey,
-			Prompt:       msg.Content,
-			SystemPrompt: agent.GetState().SystemPrompt,
-			Workspace:    agent.GetWorkspace(),
-			Media:        media,
-			Metadata: map[string]any{
-				"channel":    msg.Channel,
-				"account_id": msg.AccountID,
-				"chat_id":    msg.ChatID,
-			},
+	media := make([]MainRunMedia, 0, len(msg.Media))
+	for _, item := range msg.Media {
+		media = append(media, MainRunMedia{
+			Type:     item.Type,
+			URL:      item.URL,
+			Base64:   item.Base64,
+			MimeType: item.MimeType,
 		})
-		if runErr != nil {
-			logger.Error("Main runtime execution failed", zap.Error(runErr))
-			return runErr
-		}
+	}
 
-		output := ""
-		if runResp != nil {
-			output = strings.TrimSpace(runResp.Output)
-		}
-		if output == "" {
-			output = "(no output)"
-		}
+	runResp, runErr := m.mainRuntime.Run(ctx, MainRunRequest{
+		AgentID:      strings.TrimSpace(agentID),
+		SessionKey:   sessionKey,
+		Prompt:       msg.Content,
+		SystemPrompt: agent.GetState().SystemPrompt,
+		Workspace:    agent.GetWorkspace(),
+		Media:        media,
+		Metadata: map[string]any{
+			"channel":    msg.Channel,
+			"account_id": msg.AccountID,
+			"chat_id":    msg.ChatID,
+		},
+	})
+	if runErr != nil {
+		logger.Error("Main runtime execution failed", zap.Error(runErr))
+		return runErr
+	}
 
-		finalMessages = append(finalMessages, agentMsg)
-		finalMessages = append(finalMessages, AgentMessage{
+	output := ""
+	if runResp != nil {
+		output = strings.TrimSpace(runResp.Output)
+	}
+	if output == "" {
+		output = "(no output)"
+	}
+
+	finalMessages := []AgentMessage{
+		agentMsg,
+		{
 			Role:      RoleAssistant,
 			Content:   []ContentBlock{TextContent{Text: output}},
 			Timestamp: time.Now().UnixMilli(),
-		})
-	} else {
-		orchestrator := agent.GetOrchestrator()
-		// 执行 Agent（旧链路）
-		runMessages, runErr := orchestrator.Run(ctx, []AgentMessage{agentMsg})
-		if runErr != nil {
-			logger.Error("Agent execution failed", zap.Error(runErr))
-			return runErr
-		}
-		finalMessages = runMessages
+		},
 	}
 
 	// 更新会话
@@ -798,7 +813,7 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	if len(finalMessages) > 0 {
 		lastMsg := finalMessages[len(finalMessages)-1]
 		if lastMsg.Role == RoleAssistant {
-			m.publishToBus(ctx, msg.Channel, msg.ChatID, lastMsg)
+			m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.Metadata, lastMsg)
 		}
 	}
 
@@ -839,14 +854,19 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 }
 
 // publishToBus 发布消息到总线
-func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID string, msg AgentMessage) {
+func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID string, metadata map[string]interface{}, msg AgentMessage) {
 	content := extractTextContent(msg)
+	outboundMetadata := make(map[string]interface{}, len(metadata))
+	for k, v := range metadata {
+		outboundMetadata[k] = v
+	}
 
 	outbound := &bus.OutboundMessage{
 		Channel:   channel,
 		ChatID:    chatID,
 		Content:   content,
 		Timestamp: time.Unix(msg.Timestamp/1000, 0),
+		Metadata:  outboundMetadata,
 	}
 
 	if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -881,17 +901,7 @@ func (m *AgentManager) Start(ctx context.Context) error {
 	defer m.mu.RUnlock()
 
 	if m.mainRuntime == nil {
-		for id, agent := range m.agents {
-			if err := agent.Start(ctx); err != nil {
-				logger.Error("Failed to start agent",
-					zap.String("agent_id", id),
-					zap.Error(err))
-			} else {
-				logger.Info("Agent started", zap.String("agent_id", id))
-			}
-		}
-	} else {
-		logger.Info("Main runtime enabled; skip starting legacy agent loops")
+		return fmt.Errorf("main runtime is not configured")
 	}
 
 	// 启动消息处理器
@@ -906,22 +916,10 @@ func (m *AgentManager) Stop() error {
 	defer m.mu.RUnlock()
 
 	if m.mainRuntime == nil {
-		for id, agent := range m.agents {
-			if err := agent.Stop(); err != nil {
-				logger.Error("Failed to stop agent",
-					zap.String("agent_id", id),
-					zap.Error(err))
-			}
-		}
+		return nil
 	}
 
-	if m.mainRuntime != nil {
-		if err := m.mainRuntime.Close(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return m.mainRuntime.Close()
 }
 
 // processMessages 处理入站消息

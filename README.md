@@ -34,8 +34,9 @@ goclaw 引入了先进的技能系统，允许用户通过编写 Markdown 文档
 
 goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 
-1. `~/.goclaw/config.json` (用户全局目录，**最高优先级**)
+1. `./.goclaw/config.json` (当前工作目录，**最高优先级**)
 2. `./config.json` (当前目录)
+3. `~/.goclaw/config.json` (用户全局目录)
 
 可通过 `--config` 参数指定配置文件路径覆盖默认行为。
 
@@ -174,8 +175,9 @@ go run main.go
 
 goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 
-1. `~/.goclaw/config.json` (用户全局目录，**最高优先级**)
+1. `./.goclaw/config.json` (当前工作目录，**最高优先级**)
 2. `./config.json` (当前目录)
+3. `~/.goclaw/config.json` (用户全局目录)
 
 可通过 `--config` 参数指定配置文件路径覆盖默认行为。
 

@@ -42,16 +42,14 @@ type AgentDefaults struct {
 
 // SubagentsConfig 分身配置
 type SubagentsConfig struct {
-	Runtime               string `mapstructure:"runtime" json:"runtime"` // goclaw|agentsdk
-	MaxConcurrent         int    `mapstructure:"max_concurrent" json:"max_concurrent"`
-	FrontendMaxConcurrent int    `mapstructure:"frontend_max_concurrent" json:"frontend_max_concurrent"`
-	BackendMaxConcurrent  int    `mapstructure:"backend_max_concurrent" json:"backend_max_concurrent"`
-	ArchiveAfterMinutes   int    `mapstructure:"archive_after_minutes" json:"archive_after_minutes"`
-	Model                 string `mapstructure:"model" json:"model"`
-	Thinking              string `mapstructure:"thinking" json:"thinking"`
-	TimeoutSeconds        int    `mapstructure:"timeout_seconds" json:"timeout_seconds"`
-	SkillsRoleDir         string `mapstructure:"skills_role_dir" json:"skills_role_dir"`
-	WorkdirBase           string `mapstructure:"workdir_base" json:"workdir_base"`
+	MaxConcurrent       int            `mapstructure:"max_concurrent" json:"max_concurrent"`
+	RoleMaxConcurrent   map[string]int `mapstructure:"role_max_concurrent" json:"role_max_concurrent"`
+	ArchiveAfterMinutes int            `mapstructure:"archive_after_minutes" json:"archive_after_minutes"`
+	Model               string         `mapstructure:"model" json:"model"`
+	Thinking            string         `mapstructure:"thinking" json:"thinking"`
+	TimeoutSeconds      int            `mapstructure:"timeout_seconds" json:"timeout_seconds"`
+	SkillsRoleDir       string         `mapstructure:"skills_role_dir" json:"skills_role_dir"`
+	WorkdirBase         string         `mapstructure:"workdir_base" json:"workdir_base"`
 }
 
 // AgentSubagentConfig 单 Agent 分身配置

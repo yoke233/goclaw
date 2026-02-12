@@ -16,7 +16,6 @@ import (
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
 	sdkprompts "github.com/cexll/agentsdk-go/pkg/prompts"
 	"github.com/smallnest/goclaw/internal/logger"
-	"github.com/smallnest/goclaw/providers"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +28,6 @@ type AgentsdkRuntimeOptions struct {
 	Temperature      float64
 	MaxTokens        int
 	MaxIterations    int
-	FallbackProvider providers.Provider
 }
 
 // AgentsdkRuntime 为 sessions_spawn 提供独立执行能力。

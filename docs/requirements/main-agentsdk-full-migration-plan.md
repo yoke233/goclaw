@@ -32,37 +32,39 @@
 ## Phase 2：start 主入口切换
 
 - [x] `cli/root.go` 使用 AgentSDKEngine 驱动主回合
-- [x] `AgentManager` 使用 AgentSDKEngine 执行（保留旧链路后备分支，待删除）
+- [x] `AgentManager` 使用 AgentSDKEngine 执行
 - [x] 保持 bus/channel/gateway 流程不变（当前回归通过）
 
 ## Phase 3：agent/tui 入口统一
 
 - [x] `cli/agent.go` 改为复用 AgentSDKEngine
 - [x] `cli/commands/tui.go` 删除本地循环，改为 AgentSDKEngine
-- [ ] 统一 session_key 规则
+- [x] 统一 session_key 规则（`agent.ResolveSessionKey`）
 
 ## Phase 4：任务系统迁移
 
-- [ ] agentsdk-go 增加可注入、可持久化 TaskStore（SQLite）
-- [ ] goclaw 接入持久化 task store
-- [ ] 现有 `task` 命令切换到新 task store
-- [ ] `sessions_spawn` 与 task 状态映射对齐
+- [x] agentsdk-go 增加可注入 TaskStore 接口（SDK 不内置具体 SQLite 实现）
+- [x] goclaw 接入持久化 task store（`agent/tasksdk.SQLiteStore`）
+- [x] 现有 `task` 命令切换到新 task store（命令语义对齐 agentsdk task）
+- [x] `sessions_spawn` 与 task 状态映射对齐（`agent/tasksdk.Tracker`）
 
 ## Phase 5：旧链路删除与清理
 
-- [ ] 删除 `agent/orchestrator.go`
-- [ ] 删除 `cli/commands/tui.go` 中旧 `runAgentIteration` 路径
-- [ ] 清理主链路 `providers.Provider` 依赖
-- [ ] 清理旧 runtime 配置字段和文档
+- [x] 删除 `agent/orchestrator.go`
+- [x] 删除 `cli/commands/tui.go` 中旧 `runAgentIteration` 路径
+- [x] 清理主链路 `providers.Provider` 依赖
+- [x] 清理旧 runtime 配置字段和文档（`role_max_concurrent` 已替换）
 
 ## Phase 6：验收
 
-- [ ] `go test ./...` 全量通过
-- [ ] 新增并执行主链路 e2e 脚本
+- [x] `go test ./...` 全量通过
+- [x] 新增并执行主链路 e2e 脚本（`scripts/e2e_subagent.ps1`）
 - [ ] 手工验证：主会话 + subagent + task 完整闭环
+  - 说明：该项依赖真实 provider 凭证（如 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`）。
+  - 当前状态（2026-02-12）：本地环境未注入上述凭证，自动化 smoke 已通过，手工闭环待在真实凭证环境执行。
 
 ## 风险提示
 
 1. 一次切换风险高，必须靠自动化回归兜底。
 2. task 持久化跨仓库改造（goclaw + agentsdk-go）需要分阶段合并。
-3. `start` / `agent` / `tui` 当前执行路径不一致，重构时需统一抽象后再替换。
+3. 手工全链路验证依赖真实 provider 凭证，CI 无法完全覆盖。

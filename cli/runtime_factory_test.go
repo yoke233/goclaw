@@ -20,7 +20,7 @@ func TestBuildSubagentRuntimeDefaultAgentsdk(t *testing.T) {
 		},
 	}
 
-	runtime, mode := buildSubagentRuntime(cfg, nil)
+	runtime, mode := buildSubagentRuntime(cfg)
 	if runtime == nil {
 		t.Fatalf("buildSubagentRuntime() returned nil runtime")
 	}
@@ -29,29 +29,5 @@ func TestBuildSubagentRuntimeDefaultAgentsdk(t *testing.T) {
 	}
 	if gotType := fmt.Sprintf("%T", runtime); gotType == "" {
 		t.Fatalf("runtime type should not be empty")
-	}
-}
-
-func TestBuildSubagentRuntimeGoclawMode(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Model:         "openrouter:anthropic/claude-opus-4-5",
-				MaxIterations: 15,
-				MaxTokens:     4096,
-				Temperature:   0.7,
-				Subagents: &config.SubagentsConfig{
-					Runtime: "goclaw",
-				},
-			},
-		},
-	}
-
-	runtime, mode := buildSubagentRuntime(cfg, nil)
-	if runtime == nil {
-		t.Fatalf("buildSubagentRuntime() returned nil runtime")
-	}
-	if mode != "goclaw" {
-		t.Fatalf("runtime mode = %q, want %q", mode, "goclaw")
 	}
 }

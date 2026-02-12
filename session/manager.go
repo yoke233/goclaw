@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,41 +137,77 @@ func (m *Manager) GetOrCreate(key string) (*Session, error) {
 // Save 保存会话
 func (m *Manager) Save(session *Session) error {
 	session.mu.RLock()
-	defer session.mu.RUnlock()
+	createdAt := session.CreatedAt
+	updatedAt := session.UpdatedAt
+	sessionMetadata := make(map[string]interface{}, len(session.Metadata))
+	for k, v := range session.Metadata {
+		sessionMetadata[k] = v
+	}
+	messages := make([]Message, len(session.Messages))
+	copy(messages, session.Messages)
+	session.mu.RUnlock()
 
 	// 确定文件路径
 	filePath := m.sessionPath(session.Key)
 
-	// 创建临时文件
-	tmpPath := filePath + ".tmp"
+	// 创建唯一临时文件，避免并发保存时冲突
+	tmpPath := fmt.Sprintf("%s.%d.tmp", filePath, time.Now().UnixNano())
 	file, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	// 写入元数据行
 	encoder := json.NewEncoder(file)
-	metadata := map[string]interface{}{
+	metaLine := map[string]interface{}{
 		"_type":      "metadata",
-		"created_at": session.CreatedAt,
-		"updated_at": session.UpdatedAt,
-		"metadata":   session.Metadata,
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+		"metadata":   sessionMetadata,
 	}
-	if err := encoder.Encode(metadata); err != nil {
+	if err := encoder.Encode(metaLine); err != nil {
+		_ = file.Close()
 		return err
 	}
 
 	// 写入消息
-	for _, msg := range session.Messages {
+	for _, msg := range messages {
 		if err := encoder.Encode(msg); err != nil {
+			_ = file.Close()
 			return err
 		}
 	}
 
-	// 原子性重命名
-	if err := os.Rename(tmpPath, filePath); err != nil {
+	// 先关闭文件句柄，再替换目标文件（Windows 对打开句柄的 rename 更严格）
+	if err := file.Close(); err != nil {
 		return err
+	}
+
+	// 尝试替换目标文件，处理 Windows 下偶发占用冲突
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		if err := os.Rename(tmpPath, filePath); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		// Windows 上目标文件存在时，先删除再重命名更稳定
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			lastErr = fmt.Errorf("%w (remove target failed: %v)", lastErr, err)
+		}
+		if err := os.Rename(tmpPath, filePath); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		time.Sleep(time.Duration(20*(i+1)) * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return lastErr
 	}
 
 	return nil

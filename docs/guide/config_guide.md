@@ -346,9 +346,11 @@ export GOCLAW_WS_AUTH_TOKEN="secure-token"
 ### Configuration File Locations
 
 goclaw searches for config in this order:
-1. `~/.goclaw/config.json` (highest priority)
+1. `./.goclaw/config.json` (highest priority in current working directory)
 2. `./config.json` (current directory)
-3. Path specified with `--config` flag
+3. `~/.goclaw/config.json` (user global directory)
+
+If `--config` is provided, it overrides the search order above.
 
 ### Validation
 

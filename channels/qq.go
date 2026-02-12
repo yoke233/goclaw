@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +42,7 @@ type QQChannel struct {
 	heartbeatInt int
 	accessToken  string
 	msgSeqMap    map[string]int64 // 消息序列号管理，用于去重
+	readyAt      time.Time
 }
 
 // filteredLogger 静默 botgo SDK 的日志
@@ -85,8 +88,11 @@ type C2CMessageEventData struct {
 	Content   string `json:"content"`
 	Timestamp string `json:"timestamp"`
 	Author    struct {
+		ID         string `json:"id,omitempty"`
+		Bot        bool   `json:"bot,omitempty"`
 		UserOpenID string `json:"user_openid"`
 	} `json:"author"`
+	Attachments []QQMessageAttachment `json:"attachments"`
 }
 
 // GroupATMessageEventData 群 @消息事件数据
@@ -95,9 +101,11 @@ type GroupATMessageEventData struct {
 	Content   string `json:"content"`
 	Timestamp string `json:"timestamp"`
 	Author    struct {
+		Bot          bool   `json:"bot,omitempty"`
 		MemberOpenID string `json:"member_openid"`
 	} `json:"author"`
-	GroupOpenID string `json:"group_openid"`
+	GroupOpenID  string                `json:"group_openid"`
+	Attachments  []QQMessageAttachment `json:"attachments"`
 }
 
 // ATMessageEventData 频道 @消息事件数据
@@ -108,9 +116,18 @@ type ATMessageEventData struct {
 	Author    struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
+		Bot      bool   `json:"bot,omitempty"`
 	} `json:"author"`
 	ChannelID string `json:"channel_id"`
 	GuildID   string `json:"guild_id"`
+	Attachments []QQMessageAttachment `json:"attachments"`
+}
+
+// QQMessageAttachment QQ 消息附件
+type QQMessageAttachment struct {
+	URL         string `json:"url,omitempty"`
+	FileName    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // NewQQChannel 创建 QQ 官方 Bot 通道
@@ -467,6 +484,7 @@ func (c *QQChannel) handleReady(data json.RawMessage) {
 	}
 
 	c.sessionID = readyData.SessionID
+	c.readyAt = time.Now()
 	logger.Info("QQ Ready", zap.String("session_id", c.sessionID))
 }
 
@@ -477,27 +495,44 @@ func (c *QQChannel) handleC2CMessage(data json.RawMessage) {
 		logger.Warn("Failed to parse C2C message", zap.Error(err))
 		return
 	}
+	if event.Author.Bot {
+		logger.Debug("Skip QQ bot-authored C2C message", zap.String("msg_id", event.ID))
+		return
+	}
+	eventTime := parseQQEventTime(event.Timestamp)
+	if c.isLikelyHistoryEvent(eventTime) {
+		logger.Info("Skip QQ historical C2C message after reconnect", zap.String("msg_id", event.ID), zap.String("event_time", eventTime.Format(time.RFC3339Nano)))
+		return
+	}
 
 	senderID := event.Author.UserOpenID
 	if !c.IsAllowed(senderID) {
+		return
+	}
+	media := buildQQInboundMedia(event.Attachments)
+	if strings.TrimSpace(event.Content) == "" && len(media) == 0 {
+		logger.Warn("QQ C2C message ignored: empty content and no media", zap.String("sender", senderID), zap.String("msg_id", event.ID))
 		return
 	}
 
 	msg := &bus.InboundMessage{
 		ID:        event.ID,
 		Content:   event.Content,
+		Media:     media,
 		AccountID: c.AccountID(),
 		SenderID:  senderID,
 		ChatID:    senderID,
 		Channel:   c.Name(),
-		Timestamp: time.Now(),
+		Timestamp: fallbackNow(eventTime),
 		Metadata: map[string]interface{}{
-			"chat_type": "c2c",
-			"msg_id":    event.ID,
+			"chat_type":         "c2c",
+			"msg_id":            event.ID,
+			"attachment_count":  len(event.Attachments),
+			"inbound_media_cnt": len(media),
 		},
 	}
 
-	logger.Info("QQ C2C message", zap.String("sender", senderID), zap.String("content", event.Content))
+	logger.Info("QQ C2C message", zap.String("sender", senderID), zap.String("content", event.Content), zap.Int("media_count", len(media)))
 	_ = c.PublishInbound(context.Background(), msg)
 }
 
@@ -508,29 +543,46 @@ func (c *QQChannel) handleGroupATMessage(data json.RawMessage) {
 		logger.Warn("Failed to parse Group @message", zap.Error(err))
 		return
 	}
+	if event.Author.Bot {
+		logger.Debug("Skip QQ bot-authored Group message", zap.String("msg_id", event.ID))
+		return
+	}
+	eventTime := parseQQEventTime(event.Timestamp)
+	if c.isLikelyHistoryEvent(eventTime) {
+		logger.Info("Skip QQ historical Group message after reconnect", zap.String("msg_id", event.ID), zap.String("event_time", eventTime.Format(time.RFC3339Nano)))
+		return
+	}
 
 	senderID := event.Author.MemberOpenID
 	if !c.IsAllowed(senderID) && !c.IsAllowed(event.GroupOpenID) {
+		return
+	}
+	media := buildQQInboundMedia(event.Attachments)
+	if strings.TrimSpace(event.Content) == "" && len(media) == 0 {
+		logger.Warn("QQ Group @message ignored: empty content and no media", zap.String("group", event.GroupOpenID), zap.String("sender", senderID), zap.String("msg_id", event.ID))
 		return
 	}
 
 	msg := &bus.InboundMessage{
 		ID:        event.ID,
 		Content:   event.Content,
+		Media:     media,
 		AccountID: c.AccountID(),
 		SenderID:  senderID,
 		ChatID:    event.GroupOpenID,
 		Channel:   c.Name(),
-		Timestamp: time.Now(),
+		Timestamp: fallbackNow(eventTime),
 		Metadata: map[string]interface{}{
-			"chat_type":     "group",
-			"group_id":      event.GroupOpenID,
-			"member_openid": senderID,
-			"msg_id":        event.ID,
+			"chat_type":         "group",
+			"group_id":          event.GroupOpenID,
+			"member_openid":     senderID,
+			"msg_id":            event.ID,
+			"attachment_count":  len(event.Attachments),
+			"inbound_media_cnt": len(media),
 		},
 	}
 
-	logger.Info("QQ Group @message", zap.String("group", event.GroupOpenID), zap.String("sender", senderID), zap.String("content", event.Content))
+	logger.Info("QQ Group @message", zap.String("group", event.GroupOpenID), zap.String("sender", senderID), zap.String("content", event.Content), zap.Int("media_count", len(media)))
 	_ = c.PublishInbound(context.Background(), msg)
 }
 
@@ -541,30 +593,143 @@ func (c *QQChannel) handleChannelATMessage(data json.RawMessage) {
 		logger.Warn("Failed to parse Channel @message", zap.Error(err))
 		return
 	}
+	if event.Author.Bot {
+		logger.Debug("Skip QQ bot-authored Channel message", zap.String("msg_id", event.ID))
+		return
+	}
+	eventTime := parseQQEventTime(event.Timestamp)
+	if c.isLikelyHistoryEvent(eventTime) {
+		logger.Info("Skip QQ historical Channel message after reconnect", zap.String("msg_id", event.ID), zap.String("event_time", eventTime.Format(time.RFC3339Nano)))
+		return
+	}
 
 	senderID := event.Author.ID
 	if !c.IsAllowed(senderID) && !c.IsAllowed(event.ChannelID) {
+		return
+	}
+	media := buildQQInboundMedia(event.Attachments)
+	if strings.TrimSpace(event.Content) == "" && len(media) == 0 {
+		logger.Warn("QQ Channel @message ignored: empty content and no media", zap.String("channel", event.ChannelID), zap.String("sender", senderID), zap.String("msg_id", event.ID))
 		return
 	}
 
 	msg := &bus.InboundMessage{
 		ID:        event.ID,
 		Content:   event.Content,
+		Media:     media,
 		AccountID: c.AccountID(),
 		SenderID:  senderID,
 		ChatID:    event.ChannelID,
 		Channel:   c.Name(),
-		Timestamp: time.Now(),
+		Timestamp: fallbackNow(eventTime),
 		Metadata: map[string]interface{}{
-			"chat_type":  "channel",
-			"channel_id": event.ChannelID,
-			"group_id":   event.GuildID,
-			"msg_id":     event.ID,
+			"chat_type":         "channel",
+			"channel_id":        event.ChannelID,
+			"group_id":          event.GuildID,
+			"msg_id":            event.ID,
+			"attachment_count":  len(event.Attachments),
+			"inbound_media_cnt": len(media),
 		},
 	}
 
-	logger.Info("QQ Channel @message", zap.String("channel", event.ChannelID), zap.String("sender", senderID), zap.String("content", event.Content))
+	logger.Info("QQ Channel @message", zap.String("channel", event.ChannelID), zap.String("sender", senderID), zap.String("content", event.Content), zap.Int("media_count", len(media)))
 	_ = c.PublishInbound(context.Background(), msg)
+}
+
+func buildQQInboundMedia(attachments []QQMessageAttachment) []bus.Media {
+	if len(attachments) == 0 {
+		return nil
+	}
+
+	media := make([]bus.Media, 0, len(attachments))
+	for _, att := range attachments {
+		url := strings.TrimSpace(att.URL)
+		if url == "" {
+			continue
+		}
+		// QQ 返回的附件链接可能省略协议头
+		if strings.HasPrefix(url, "//") {
+			url = "https:" + url
+		}
+
+		mimeType := strings.ToLower(strings.TrimSpace(att.ContentType))
+		mediaType := "document"
+		switch {
+		case strings.HasPrefix(mimeType, "image/"):
+			mediaType = "image"
+		case strings.HasPrefix(mimeType, "video/"):
+			mediaType = "video"
+		case strings.HasPrefix(mimeType, "audio/"), mimeType == "voice":
+			mediaType = "audio"
+		}
+
+		media = append(media, bus.Media{
+			Type:     mediaType,
+			URL:      url,
+			MimeType: mimeType,
+		})
+	}
+
+	if len(media) == 0 {
+		return nil
+	}
+	return media
+}
+
+func parseQQEventTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+
+	// 优先尝试 Unix 时间戳（秒/毫秒）
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		// 13 位通常是毫秒
+		if n > 1_000_000_000_000 {
+			return time.UnixMilli(n)
+		}
+		// 10 位通常是秒
+		if n > 1_000_000_000 {
+			return time.Unix(n, 0)
+		}
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z07:00",
+		"2006-01-02T15:04:05Z07:00",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func fallbackNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now()
+	}
+	return t
+}
+
+func (c *QQChannel) isLikelyHistoryEvent(eventTime time.Time) bool {
+	if eventTime.IsZero() {
+		return false
+	}
+
+	c.mu.RLock()
+	readyAt := c.readyAt
+	c.mu.RUnlock()
+	if readyAt.IsZero() {
+		return false
+	}
+
+	// 连接后若收到明显早于 Ready 的消息，通常是历史/回放事件，避免“刚连上就自动回复”。
+	const grace = 5 * time.Second
+	return eventTime.Before(readyAt.Add(-grace))
 }
 
 // Send 发送消息

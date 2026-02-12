@@ -1,5 +1,7 @@
 # agentsdk-go 集成实现说明（执行级细化）
 
+> 状态说明：本文档为阶段性实现细化记录。当前代码已进入全量迁移阶段，执行以 `docs/requirements/main-agentsdk-full-migration-plan.md` 为准。
+
 本文档是对 `docs/requirements/agentsdk-integration.md` 的执行级细化，面向实现工作树的工程师。内容以“能直接写代码”为目标，列出需要新增的文件、函数签名、数据流与改动点。
 
 ## 1. 新增模块与接口
@@ -208,7 +210,7 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 
 #### `sendToSession` 具体实现
 
-推荐方式：构造 `InboundMessage` 走现有 `handleInboundMessage`，避免直接改 orchestrator 并发。
+推荐方式：构造 `InboundMessage` 走现有 `handleInboundMessage`，避免绕开 `AgentManager` 的并发与路由控制。
 
 ```go
 func (m *AgentManager) sendToSession(sessionKey, message string) error {
@@ -237,7 +239,7 @@ if v := ctx.Value(runtime.CtxSessionKey); v != nil { requesterSessionKey = v.(st
 
 ### 3.3 `AgentManager.handleInboundMessage`
 
-在调用 orchestrator 前，包装 `context.WithValue`：
+在进入主执行引擎前，包装 `context.WithValue`：
 
 ```go
 ctx = context.WithValue(ctx, runtime.CtxSessionKey, sessionKey)
@@ -261,11 +263,11 @@ agentManager := agent.NewAgentManager(&agent.NewAgentManagerConfig{
 
 ### 3.5 `config/schema.go`
 
-为 subagent 增加 runtime 与路径配置：
+为 subagent 增加路径与并发配置：
 
 ```go
 type SubagentsConfig struct {
-    Runtime string `mapstructure:"runtime" json:"runtime"` // goclaw|agentsdk
+    RoleMaxConcurrent map[string]int `mapstructure:"role_max_concurrent" json:"role_max_concurrent"`
     SkillsRoleDir string `mapstructure:"skills_role_dir" json:"skills_role_dir"`
     WorkdirBase string `mapstructure:"workdir_base" json:"workdir_base"`
 }

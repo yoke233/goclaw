@@ -21,15 +21,21 @@ func Load(configPath string) (*Config, error) {
 	if configPath != "" {
 		v.SetConfigFile(configPath)
 	} else {
-		// 默认配置文件路径
+		// 默认配置文件搜索路径（按优先级）
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get home directory: %w", err)
 		}
 
-		configDir := filepath.Join(home, ".goclaw")
-		v.AddConfigPath(configDir)
+		localConfigDir := filepath.Join(".", ".goclaw")
+		homeConfigDir := filepath.Join(home, ".goclaw")
+
+		// 1) 当前工作目录下 .goclaw/config.json
+		v.AddConfigPath(localConfigDir)
+		// 2) 当前工作目录 ./config.json
 		v.AddConfigPath(".")
+		// 3) 用户目录 ~/.goclaw/config.json
+		v.AddConfigPath(homeConfigDir)
 		v.SetConfigName("config")
 		v.SetConfigType("json")
 	}
@@ -67,10 +73,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agents.defaults.max_iterations", 15)
 	v.SetDefault("agents.defaults.temperature", 0.7)
 	v.SetDefault("agents.defaults.max_tokens", 4096)
-	v.SetDefault("agents.defaults.subagents.runtime", "agentsdk")
 	v.SetDefault("agents.defaults.subagents.max_concurrent", 8)
-	v.SetDefault("agents.defaults.subagents.frontend_max_concurrent", 5)
-	v.SetDefault("agents.defaults.subagents.backend_max_concurrent", 4)
+	v.SetDefault("agents.defaults.subagents.role_max_concurrent", map[string]int{
+		"frontend": 5,
+		"backend":  4,
+	})
 	v.SetDefault("agents.defaults.subagents.archive_after_minutes", 60)
 	v.SetDefault("agents.defaults.subagents.timeout_seconds", 900)
 	v.SetDefault("agents.defaults.subagents.skills_role_dir", "skills")
