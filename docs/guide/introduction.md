@@ -499,11 +499,12 @@ type FailoverProvider struct {
 
 ### 技能加载顺序
 
-1. 传入的自定义目录
-2. `workspace/skills/`
-3. `workspace/.goclaw/skills/`
-4. 可执行文件路径 `/skills/`
-5. `./skills/`（当前目录，优先级最高）
+goclaw 推荐使用 **`.agents/` 目录**来管理 skills 与 MCP（文件即真相，可被 Git 管理）：
+
+- Skills：`<root>/.agents/skills/<skill_name>/SKILL.md`
+- MCP：`<root>/.agents/config.toml`
+
+其中 `<root>` 可以是 workspace、role pack、或具体项目 repo（项目 repo 的 `.agents` 配置优先级最高，会覆盖上层）。
 
 ---
 

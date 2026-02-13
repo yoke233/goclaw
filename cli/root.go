@@ -263,10 +263,10 @@ func runStart(cmd *cobra.Command, args []string) {
 		tools.NewSkillsPutTool(workspaceDir, skillsRoleDir, invalidateRuntime),
 		tools.NewSkillsDeleteTool(workspaceDir, skillsRoleDir, invalidateRuntime),
 		tools.NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir, invalidateRuntime),
-		tools.NewMCPListTool(workspaceDir),
-		tools.NewMCPPutServerTool(workspaceDir, invalidateRuntime),
-		tools.NewMCPDeleteServerTool(workspaceDir, invalidateRuntime),
-		tools.NewMCPSetEnabledTool(workspaceDir, invalidateRuntime),
+		tools.NewMCPListTool(workspaceDir, skillsRoleDir),
+		tools.NewMCPPutServerTool(workspaceDir, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPDeleteServerTool(workspaceDir, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPSetEnabledTool(workspaceDir, skillsRoleDir, invalidateRuntime),
 		tools.NewRuntimeReloadTool(invalidateRuntime),
 	} {
 		if tool == nil {

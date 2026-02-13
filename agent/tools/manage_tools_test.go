@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -148,7 +149,7 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		return nil
 	})
 
-	putTool := NewMCPPutServerTool(workspace, invalidate)
+	putTool := NewMCPPutServerTool(workspace, "skills", invalidate)
 	putOut, err := putTool.Execute(ctx, map[string]interface{}{
 		"name":           "time",
 		"enabled":        true,
@@ -181,7 +182,7 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("expected 1 server, got %+v", cfg)
 	}
 
-	listTool := NewMCPListTool(workspace)
+	listTool := NewMCPListTool(workspace, "skills")
 	listOut, err := listTool.Execute(ctx, map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("mcp_list: %v", err)
@@ -205,7 +206,7 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("unexpected list servers: %+v", listRes.Servers)
 	}
 
-	setEnabledTool := NewMCPSetEnabledTool(workspace, invalidate)
+	setEnabledTool := NewMCPSetEnabledTool(workspace, "skills", invalidate)
 	disableOut, err := setEnabledTool.Execute(ctx, map[string]interface{}{"name": "time", "enabled": false})
 	if err != nil {
 		t.Fatalf("mcp_set_enabled: %v", err)
@@ -226,7 +227,7 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("unexpected disable result: %+v", disableRes)
 	}
 
-	deleteTool := NewMCPDeleteServerTool(workspace, invalidate)
+	deleteTool := NewMCPDeleteServerTool(workspace, "skills", invalidate)
 	deleteOut, err := deleteTool.Execute(ctx, map[string]interface{}{"name": "time"})
 	if err != nil {
 		t.Fatalf("mcp_delete_server: %v", err)
@@ -254,5 +255,151 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 
 	if invalidateCalls < 3 {
 		t.Fatalf("expected invalidate to be called (>=3), got %d", invalidateCalls)
+	}
+}
+
+func TestSkillsScopeWorkspaceAndRepo(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	// workspace scope: <workspace>/.agents/skills/<skill>
+	putTool := NewSkillsPutTool(workspace, "skills", invalidate)
+	putOut, err := putTool.Execute(ctx, map[string]interface{}{
+		"scope":      "workspace",
+		"skill_name": "w1",
+		"skill_md":   "---\nname: w1\ndescription: test\n---\n# W1\n",
+		"enabled":    true,
+	})
+	if err != nil {
+		t.Fatalf("skills_put workspace: %v", err)
+	}
+	var putRes struct {
+		Success bool   `json:"success"`
+		Scope   string `json:"scope"`
+		Dir     string `json:"dir"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(putOut), &putRes); err != nil {
+		t.Fatalf("unmarshal put workspace: %v", err)
+	}
+	if !putRes.Success || putRes.Scope != "workspace" || putRes.Error != "" {
+		t.Fatalf("unexpected put workspace result: %+v", putRes)
+	}
+	if want := filepath.Join(workspace, ".agents", "skills", "w1"); putRes.Dir != want {
+		t.Fatalf("workspace dir=%s, want %s", putRes.Dir, want)
+	}
+
+	// repo scope: <repo>/.agents/skills/<skill> (repo_dir must be within workspace)
+	repoDir := filepath.Join(workspace, "repos", "demo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repoDir: %v", err)
+	}
+	putOut2, err := putTool.Execute(ctx, map[string]interface{}{
+		"scope":      "repo",
+		"repo_dir":   filepath.Join("repos", "demo"),
+		"skill_name": "r1",
+		"skill_md":   "---\nname: r1\ndescription: test\n---\n# R1\n",
+		"enabled":    true,
+	})
+	if err != nil {
+		t.Fatalf("skills_put repo: %v", err)
+	}
+	if err := json.Unmarshal([]byte(putOut2), &putRes); err != nil {
+		t.Fatalf("unmarshal put repo: %v", err)
+	}
+	if !putRes.Success || putRes.Scope != "repo" || putRes.Error != "" {
+		t.Fatalf("unexpected put repo result: %+v", putRes)
+	}
+	if want := filepath.Join(repoDir, ".agents", "skills", "r1"); putRes.Dir != want {
+		t.Fatalf("repo dir=%s, want %s", putRes.Dir, want)
+	}
+}
+
+func TestMCPScopeRoleAndRepo(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	putTool := NewMCPPutServerTool(workspace, "skills", invalidate)
+
+	// role scope: <workspace>/<skills_role_dir>/<role>/.agents/config.toml
+	putOut, err := putTool.Execute(ctx, map[string]interface{}{
+		"scope":          "role",
+		"role":           "frontend",
+		"name":           "time",
+		"enabled":        true,
+		"type":           "stdio",
+		"command":        "uvx",
+		"args":           []interface{}{"mcp-server-time"},
+		"timeoutSeconds": 10,
+	})
+	if err != nil {
+		t.Fatalf("mcp_put_server role: %v", err)
+	}
+	var putRes struct {
+		Success bool   `json:"success"`
+		Scope   string `json:"scope"`
+		Path    string `json:"path"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(putOut), &putRes); err != nil {
+		t.Fatalf("unmarshal put role: %v", err)
+	}
+	if !putRes.Success || putRes.Scope != "role" || putRes.Error != "" {
+		t.Fatalf("unexpected put role result: %+v", putRes)
+	}
+
+	roleRoot := filepath.Join(workspace, "skills", "frontend")
+	cfgPath := extensions.AgentsConfigPath(roleRoot)
+	cfg, err := extensions.LoadAgentsConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadAgentsConfig role: %v", err)
+	}
+	if cfg == nil || len(cfg.MCPServers) != 1 {
+		t.Fatalf("expected 1 server in role config, got %+v", cfg)
+	}
+
+	// repo scope: <repo>/.agents/config.toml (repo_dir must be within workspace)
+	repoDir := filepath.Join(workspace, "repos", "demo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repoDir: %v", err)
+	}
+	putOut2, err := putTool.Execute(ctx, map[string]interface{}{
+		"scope":          "repo",
+		"repo_dir":       filepath.Join("repos", "demo"),
+		"name":           "figma",
+		"enabled":        true,
+		"type":           "http",
+		"url":            "https://mcp.figma.com/mcp",
+		"timeoutSeconds": 15,
+	})
+	if err != nil {
+		t.Fatalf("mcp_put_server repo: %v", err)
+	}
+	if err := json.Unmarshal([]byte(putOut2), &putRes); err != nil {
+		t.Fatalf("unmarshal put repo: %v", err)
+	}
+	if !putRes.Success || putRes.Scope != "repo" || putRes.Error != "" {
+		t.Fatalf("unexpected put repo result: %+v", putRes)
+	}
+
+	cfg2Path := extensions.AgentsConfigPath(repoDir)
+	cfg2, err := extensions.LoadAgentsConfig(cfg2Path)
+	if err != nil {
+		t.Fatalf("LoadAgentsConfig repo: %v", err)
+	}
+	if cfg2 == nil || len(cfg2.MCPServers) != 1 {
+		t.Fatalf("expected 1 server in repo config, got %+v", cfg2)
 	}
 }

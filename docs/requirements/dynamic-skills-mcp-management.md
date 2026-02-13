@@ -95,40 +95,94 @@ TZ = "UTC"
 ### Skills 管理工具
 
 - `skills_list`
-  - 入参：`role`（可选，默认 `main`），`include_disabled`（可选）
+  - 入参：
+    - `scope`（可选，默认 `role`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `include_disabled`（可选）
   - 出参：skills 列表（name、enabled、path、has_skill_md 等）
 
 - `skills_get`
-  - 入参：`role`（可选，默认 `main`），`skill_name`，`include_content`（可选，默认 true）
+  - 入参：
+    - `scope`（可选，默认 `role`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `skill_name`
+    - `include_content`（可选，默认 true）
   - 出参：skill 元信息 + SKILL.md 内容
 
 - `skills_put`
-  - 入参：`role`（可选，默认 `main`），`skill_name`，`skill_md`（SKILL.md 全文），`enabled`（可选），`overwrite`（可选）
-  - 行为：写入/更新 `<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>/SKILL.md`，并按 enabled 写 `.disabled`；成功后请求 runtime reload
+  - 入参：
+    - `scope`（可选，默认 `role`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `skill_name`
+    - `skill_md`（SKILL.md 全文）
+    - `enabled`（可选）
+    - `overwrite`（可选）
+  - 行为：写入/更新目标 root 的 `.agents/skills/<skill_name>/SKILL.md`，并按 enabled 写 `.disabled`；成功后请求 runtime reload
+  - 路径示例：
+    - `scope=workspace`：`<workspace>/.agents/skills/<skill_name>/SKILL.md`
+    - `scope=role`：`<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>/SKILL.md`
+    - `scope=repo`：`<repo_dir>/.agents/skills/<skill_name>/SKILL.md`
 
 - `skills_delete`
-  - 入参：`role`（可选，默认 `main`），`skill_name`
-  - 行为：删除 `<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>`；成功后请求 runtime reload
+  - 入参：
+    - `scope`（可选，默认 `role`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `skill_name`
+  - 行为：删除目标 root 的 `.agents/skills/<skill_name>`；成功后请求 runtime reload
 
 - `skills_set_enabled`
-  - 入参：`role`（可选，默认 `main`），`skill_name`，`enabled`
-  - 行为：增删 `.disabled`；成功后请求 runtime reload
+  - 入参：
+    - `scope`（可选，默认 `role`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `skill_name`
+    - `enabled`
+  - 行为：在目标 root 的 `.agents/skills/<skill_name>/` 下增删 `.disabled`；成功后请求 runtime reload
 
 ### MCP 管理工具
 
 - `mcp_list`
+  - 入参：
+    - `scope`（可选，默认 `workspace`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
   - 出参：servers 列表（name、enabled、type、command/url、timeoutSeconds）
 
 - `mcp_put_server`
-  - 入参：`name`，`enabled`，`type`（可选），`command`/`args`/`url`，`env`，`headers`，`timeoutSeconds` 等
-  - 行为：写入/更新 `<root>/.agents/config.toml`；成功后请求 runtime reload
+  - 入参：
+    - `scope`（可选，默认 `workspace`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `name`
+    - `enabled`
+    - `type`（可选）
+    - `command`/`args`/`url`
+    - `env`，`headers`，`timeoutSeconds` 等
+  - 行为：写入/更新目标 root 的 `.agents/config.toml`；成功后请求 runtime reload
+  - 路径示例：
+    - `scope=workspace`：`<workspace>/.agents/config.toml`
+    - `scope=role`：`<workspace>/<skills_role_dir>/<role>/.agents/config.toml`
+    - `scope=repo`：`<repo_dir>/.agents/config.toml`
 
 - `mcp_delete_server`
-  - 入参：`name`
-  - 行为：删除 server；成功后请求 runtime reload
+  - 入参：
+    - `scope`（可选，默认 `workspace`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `name`
+  - 行为：删除目标 root 下的 server；成功后请求 runtime reload
 
 - `mcp_set_enabled`
-  - 入参：`name`，`enabled`
+  - 入参：
+    - `scope`（可选，默认 `workspace`）：`workspace|role|repo`
+    - `role`（可选，默认 `main`，仅当 `scope=role` 生效）
+    - `repo_dir`（可选，仅当 `scope=repo` 生效；要求在 workspace 目录内，支持相对路径）
+    - `name`
+    - `enabled`
   - 行为：切换 enabled；成功后请求 runtime reload
 
 - `runtime_reload`

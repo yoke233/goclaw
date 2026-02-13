@@ -42,17 +42,23 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 
 #### Skills 加载顺序
 
-技能按以下顺序加载，**同名技能后面的会覆盖前面的**：
+goclaw 当前推荐使用 **`.agents/` 目录**作为 skills 与 MCP 的“文件即真相”来源（可被 Git 管理、可审计、可重建运行时）。
 
-| 顺序 | 路径 | 说明 |
-|-----|------|------|
-| 1 | `传入的自定义目录` | 通过 `NewSkillsLoader()` 指定 |
-| 2 | `workspace/skills/` | 工作区目录 |
-| 3 | `workspace/.goclaw/skills/` | 工作区隐藏目录 |
-| 4 | `<可执行文件路径>/skills/` | 可执行文件同级目录 |
-| 5 | `./skills/` (当前目录) | **最后加载，优先级最高** |
+- MCP 配置：`<root>/.agents/config.toml`
+- Skills：`<root>/.agents/skills/<skill_name>/SKILL.md`
+- 禁用 skill：`<root>/.agents/skills/<skill_name>/.disabled`
 
-默认 `workspace` 为 `~/.goclaw/workspace`。
+其中 `<root>` 可以是：
+
+- `workspace`（公共层）：`<workspace>/.agents/...`
+- `role pack`（角色层）：`<workspace>/<skills_role_dir>/<role>/.agents/...`
+- `repo`（项目层 overlay，优先级最高）：`<repo_dir>/.agents/...`
+
+subagent 的加载与覆盖规则见：`docs/requirements/subagent-layering-and-agents-dir.md`。
+
+备注：
+
+- 历史文件 `workspace/.goclaw/mcp.json` 仍可作为 legacy 输入被读取，但新的管理工具会写入 `.agents/config.toml`。
 
 1.  **列出可用技能**
     ```bash
@@ -60,13 +66,12 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
     ```
 
 2.  **安装技能**
-    将技能文件夹放入以下任一位置：
-    *   `./skills/` (当前目录，最高优先级)
-    *   `${WORKSPACE}/skills/` (工作区目录)
-    *   `~/.goclaw/skills/` (用户全局目录)
+    推荐将 skill 放到目标 root 的 `.agents/skills/` 下（例如 `role pack` 或具体项目 repo）：
+    *   `<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>/SKILL.md`
+    *   `<repo_dir>/.agents/skills/<skill_name>/SKILL.md`
 
 3.  **编写技能**
-    创建一个目录 `my-skill`，并在其中创建 `SKILL.md`：
+    在目标 root 下创建目录 `.agents/skills/my-skill/`，并在其中创建 `SKILL.md`：
     ```yaml
     ---
     name: my-skill

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
+	"github.com/smallnest/goclaw/extensions"
 )
 
 type skillListItem struct {
@@ -22,7 +23,10 @@ type skillListItem struct {
 
 type skillsListResult struct {
 	Success bool            `json:"success"`
+	Scope   string          `json:"scope,omitempty"`
 	Role    string          `json:"role"`
+	RepoDir string          `json:"repo_dir,omitempty"`
+	RootDir string          `json:"root_dir,omitempty"`
 	BaseDir string          `json:"base_dir"`
 	Skills  []skillListItem `json:"skills"`
 	Message string          `json:"message,omitempty"`
@@ -30,7 +34,11 @@ type skillsListResult struct {
 }
 
 type skillsGetResult struct {
-	Success bool `json:"success"`
+	Success bool   `json:"success"`
+	Scope   string `json:"scope,omitempty"`
+	Role    string `json:"role,omitempty"`
+	RepoDir string `json:"repo_dir,omitempty"`
+	RootDir string `json:"root_dir,omitempty"`
 	Skill   struct {
 		Name      string `json:"name"`
 		Role      string `json:"role"`
@@ -45,7 +53,10 @@ type skillsGetResult struct {
 
 type skillsPutResult struct {
 	Success   bool   `json:"success"`
+	Scope     string `json:"scope,omitempty"`
 	Role      string `json:"role"`
+	RepoDir   string `json:"repo_dir,omitempty"`
+	RootDir   string `json:"root_dir,omitempty"`
 	Name      string `json:"name"`
 	Dir       string `json:"dir"`
 	SkillFile string `json:"skill_file"`
@@ -57,7 +68,10 @@ type skillsPutResult struct {
 
 type skillsDeleteResult struct {
 	Success  bool   `json:"success"`
+	Scope    string `json:"scope,omitempty"`
 	Role     string `json:"role"`
+	RepoDir  string `json:"repo_dir,omitempty"`
+	RootDir  string `json:"root_dir,omitempty"`
 	Name     string `json:"name"`
 	Dir      string `json:"dir"`
 	Deleted  bool   `json:"deleted"`
@@ -68,7 +82,10 @@ type skillsDeleteResult struct {
 
 type skillsSetEnabledResult struct {
 	Success  bool   `json:"success"`
+	Scope    string `json:"scope,omitempty"`
 	Role     string `json:"role"`
+	RepoDir  string `json:"repo_dir,omitempty"`
+	RootDir  string `json:"root_dir,omitempty"`
 	Name     string `json:"name"`
 	Dir      string `json:"dir"`
 	Enabled  bool   `json:"enabled"`
@@ -80,14 +97,23 @@ type skillsSetEnabledResult struct {
 func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 	return NewBaseTool(
 		"skills_list",
-		"List skills for a given role under the role pack .agents/skills directory.",
+		"List skills for a target scope (workspace|role|repo) under .agents/skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: role|workspace|repo. Defaults to 'role'.",
+					"default":     "role",
+				},
 				"role": map[string]interface{}{
 					"type":        "string",
-					"description": "Role name. Defaults to 'main'.",
+					"description": "Role name when scope=role. Defaults to 'main'.",
 					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
 				},
 				"include_disabled": map[string]interface{}{
 					"type":        "boolean",
@@ -98,12 +124,9 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
 			_ = ctx
-			role := strings.TrimSpace(asString(params["role"]))
-			if role == "" {
-				role = "main"
-			}
-			if !isSafeIdent(role) {
-				return marshalSkillsError(role, skillsRoleBaseDir(workspaceDir, skillsRoleDir, role), fmt.Sprintf("invalid role: %s", role)), nil
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "role")
+			if err != nil {
+				return marshalSkillsError("", "", err.Error()), nil
 			}
 
 			includeDisabled := true
@@ -111,23 +134,29 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 				includeDisabled = v
 			}
 
-			roleDir := skillsRoleBaseDir(workspaceDir, skillsRoleDir, role)
-			entries, err := os.ReadDir(roleDir)
+			skillsDir := extensions.AgentsSkillsDir(target.RootDir)
+			entries, err := os.ReadDir(skillsDir)
 			if err != nil {
 				if os.IsNotExist(err) {
 					out, _ := json.Marshal(skillsListResult{
 						Success: true,
-						Role:    role,
-						BaseDir: roleDir,
+						Scope:   target.Scope,
+						Role:    target.Role,
+						RepoDir: target.RepoDir,
+						RootDir: target.RootDir,
+						BaseDir: skillsDir,
 						Skills:  nil,
-						Message: "role directory does not exist (no skills)",
+						Message: "skills directory does not exist (no skills)",
 					})
 					return string(out), nil
 				}
 				out, _ := json.Marshal(skillsListResult{
 					Success: false,
-					Role:    role,
-					BaseDir: roleDir,
+					Scope:   target.Scope,
+					Role:    target.Role,
+					RepoDir: target.RepoDir,
+					RootDir: target.RootDir,
+					BaseDir: skillsDir,
 					Error:   err.Error(),
 				})
 				return string(out), nil
@@ -146,7 +175,7 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 					continue
 				}
 
-				dir := filepath.Join(roleDir, name)
+				dir := filepath.Join(skillsDir, name)
 				enabled := !fileExists(filepath.Join(dir, ".disabled"))
 				if !enabled && !includeDisabled {
 					continue
@@ -155,7 +184,7 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 				skillFile := resolveSkillFile(dir)
 				skills = append(skills, skillListItem{
 					Name:      name,
-					Role:      role,
+					Role:      target.Role,
 					Enabled:   enabled,
 					Dir:       dir,
 					SkillFile: skillFile,
@@ -168,8 +197,11 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 
 			out, _ := json.Marshal(skillsListResult{
 				Success: true,
-				Role:    role,
-				BaseDir: roleDir,
+				Scope:   target.Scope,
+				Role:    target.Role,
+				RepoDir: target.RepoDir,
+				RootDir: target.RootDir,
+				BaseDir: skillsDir,
 				Skills:  skills,
 				Message: fmt.Sprintf("found %d skills", len(skills)),
 			})
@@ -181,14 +213,23 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 	return NewBaseTool(
 		"skills_get",
-		"Get a skill's SKILL.md content for a given role (from role pack .agents/skills).",
+		"Get a skill's SKILL.md content for a target scope (workspace|role|repo) from .agents/skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: role|workspace|repo. Defaults to 'role'.",
+					"default":     "role",
+				},
 				"role": map[string]interface{}{
 					"type":        "string",
-					"description": "Role name. Defaults to 'main'.",
+					"description": "Role name when scope=role. Defaults to 'main'.",
 					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
 				},
 				"skill_name": map[string]interface{}{
 					"type":        "string",
@@ -204,20 +245,17 @@ func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
 			_ = ctx
-			role := strings.TrimSpace(asString(params["role"]))
-			if role == "" {
-				role = "main"
-			}
-			if !isSafeIdent(role) {
-				return marshalSkillsError(role, skillsRoleBaseDir(workspaceDir, skillsRoleDir, role), fmt.Sprintf("invalid role: %s", role)), nil
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "role")
+			if err != nil {
+				return marshalSkillsError("", "", err.Error()), nil
 			}
 
 			name := strings.TrimSpace(asString(params["skill_name"]))
 			if name == "" {
-				return marshalSkillsError(role, skillsRoleBaseDir(workspaceDir, skillsRoleDir, role), "skill_name is required"), nil
+				return marshalSkillsError(target.Role, extensions.AgentsSkillsDir(target.RootDir), "skill_name is required"), nil
 			}
 			if !isSafeIdent(name) {
-				return marshalSkillsError(role, skillsRoleBaseDir(workspaceDir, skillsRoleDir, role), fmt.Sprintf("invalid skill_name: %s", name)), nil
+				return marshalSkillsError(target.Role, extensions.AgentsSkillsDir(target.RootDir), fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
 			includeContent := true
@@ -225,14 +263,14 @@ func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 				includeContent = v
 			}
 
-			roleDir := skillsRoleBaseDir(workspaceDir, skillsRoleDir, role)
-			skillDir := filepath.Join(roleDir, name)
+			skillsDir := extensions.AgentsSkillsDir(target.RootDir)
+			skillDir := filepath.Join(skillsDir, name)
 			enabled := !fileExists(filepath.Join(skillDir, ".disabled"))
 			skillFile := resolveSkillFile(skillDir)
 
-			result := skillsGetResult{Success: true}
+			result := skillsGetResult{Success: true, Scope: target.Scope, Role: target.Role, RepoDir: target.RepoDir, RootDir: target.RootDir}
 			result.Skill.Name = name
-			result.Skill.Role = role
+			result.Skill.Role = target.Role
 			result.Skill.Enabled = enabled
 			result.Skill.Dir = skillDir
 			result.Skill.SkillFile = skillFile
@@ -264,14 +302,23 @@ func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_put",
-		"Create or update a skill (writes SKILL.md) under <workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>, then request runtime reload.",
+		"Create or update a skill (writes SKILL.md) under .agents/skills for a target scope (workspace|role|repo), then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: role|workspace|repo. Defaults to 'role'.",
+					"default":     "role",
+				},
 				"role": map[string]interface{}{
 					"type":        "string",
-					"description": "Role name. Defaults to 'main'.",
+					"description": "Role name when scope=role. Defaults to 'main'.",
 					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
 				},
 				"skill_name": map[string]interface{}{
 					"type":        "string",
@@ -295,25 +342,22 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 			"required": []string{"skill_name", "skill_md"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
-			role := strings.TrimSpace(asString(params["role"]))
-			if role == "" {
-				role = "main"
-			}
-			if !isSafeIdent(role) {
-				return marshalSkillsPutError(role, "", fmt.Sprintf("invalid role: %s", role)), nil
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "role")
+			if err != nil {
+				return marshalSkillsPutError("", "", err.Error()), nil
 			}
 
 			name := strings.TrimSpace(asString(params["skill_name"]))
 			if name == "" {
-				return marshalSkillsPutError(role, "", "skill_name is required"), nil
+				return marshalSkillsPutError(target.Role, "", "skill_name is required"), nil
 			}
 			if !isSafeIdent(name) {
-				return marshalSkillsPutError(role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
+				return marshalSkillsPutError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
 			md := asString(params["skill_md"])
 			if strings.TrimSpace(md) == "" {
-				return marshalSkillsPutError(role, "", "skill_md is empty"), nil
+				return marshalSkillsPutError(target.Role, "", "skill_md is empty"), nil
 			}
 
 			enabled := true
@@ -326,21 +370,21 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 				overwrite = v
 			}
 
-			roleDir := skillsRoleBaseDir(workspaceDir, skillsRoleDir, role)
-			skillDir := filepath.Join(roleDir, name)
+			skillsDir := extensions.AgentsSkillsDir(target.RootDir)
+			skillDir := filepath.Join(skillsDir, name)
 			skillFile := filepath.Join(skillDir, "SKILL.md")
 			disabledFile := filepath.Join(skillDir, ".disabled")
 
 			if err := os.MkdirAll(skillDir, 0o755); err != nil {
-				return marshalSkillsPutError(role, skillDir, err.Error()), nil
+				return marshalSkillsPutError(target.Role, skillDir, err.Error()), nil
 			}
 
 			if !overwrite && fileExists(skillFile) {
-				return marshalSkillsPutError(role, skillDir, "SKILL.md already exists and overwrite=false"), nil
+				return marshalSkillsPutError(target.Role, skillDir, "SKILL.md already exists and overwrite=false"), nil
 			}
 
 			if err := os.WriteFile(skillFile, []byte(md), 0o644); err != nil {
-				return marshalSkillsPutError(role, skillDir, err.Error()), nil
+				return marshalSkillsPutError(target.Role, skillDir, err.Error()), nil
 			}
 
 			if enabled {
@@ -362,7 +406,10 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 
 			out, _ := json.Marshal(skillsPutResult{
 				Success:   true,
-				Role:      role,
+				Scope:     target.Scope,
+				Role:      target.Role,
+				RepoDir:   target.RepoDir,
+				RootDir:   target.RootDir,
 				Name:      name,
 				Dir:       skillDir,
 				SkillFile: skillFile,
@@ -378,14 +425,23 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_delete",
-		"Delete a skill directory under <workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>, then request runtime reload.",
+		"Delete a skill directory under .agents/skills for a target scope (workspace|role|repo), then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: role|workspace|repo. Defaults to 'role'.",
+					"default":     "role",
+				},
 				"role": map[string]interface{}{
 					"type":        "string",
-					"description": "Role name. Defaults to 'main'.",
+					"description": "Role name when scope=role. Defaults to 'main'.",
 					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
 				},
 				"skill_name": map[string]interface{}{
 					"type":        "string",
@@ -395,28 +451,28 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 			"required": []string{"skill_name"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
-			role := strings.TrimSpace(asString(params["role"]))
-			if role == "" {
-				role = "main"
-			}
-			if !isSafeIdent(role) {
-				return marshalSkillsDeleteError(role, "", fmt.Sprintf("invalid role: %s", role)), nil
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "role")
+			if err != nil {
+				return marshalSkillsDeleteError("", "", err.Error()), nil
 			}
 
 			name := strings.TrimSpace(asString(params["skill_name"]))
 			if name == "" {
-				return marshalSkillsDeleteError(role, "", "skill_name is required"), nil
+				return marshalSkillsDeleteError(target.Role, "", "skill_name is required"), nil
 			}
 			if !isSafeIdent(name) {
-				return marshalSkillsDeleteError(role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
+				return marshalSkillsDeleteError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
-			roleDir := skillsRoleBaseDir(workspaceDir, skillsRoleDir, role)
-			skillDir := filepath.Join(roleDir, name)
+			skillsDir := extensions.AgentsSkillsDir(target.RootDir)
+			skillDir := filepath.Join(skillsDir, name)
 			if !dirExists(skillDir) {
 				out, _ := json.Marshal(skillsDeleteResult{
 					Success: false,
-					Role:    role,
+					Scope:   target.Scope,
+					Role:    target.Role,
+					RepoDir: target.RepoDir,
+					RootDir: target.RootDir,
 					Name:    name,
 					Dir:     skillDir,
 					Deleted: false,
@@ -426,7 +482,7 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 			}
 
 			if err := os.RemoveAll(skillDir); err != nil {
-				return marshalSkillsDeleteError(role, skillDir, err.Error()), nil
+				return marshalSkillsDeleteError(target.Role, skillDir, err.Error()), nil
 			}
 
 			reloaded := false
@@ -442,7 +498,10 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 
 			out, _ := json.Marshal(skillsDeleteResult{
 				Success:  true,
-				Role:     role,
+				Scope:    target.Scope,
+				Role:     target.Role,
+				RepoDir:  target.RepoDir,
+				RootDir:  target.RootDir,
 				Name:     name,
 				Dir:      skillDir,
 				Deleted:  true,
@@ -457,14 +516,23 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_set_enabled",
-		"Enable or disable a skill (role pack .agents/skills) by toggling its .disabled file, then request runtime reload.",
+		"Enable or disable a skill under .agents/skills for a target scope (workspace|role|repo) by toggling its .disabled file, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: role|workspace|repo. Defaults to 'role'.",
+					"default":     "role",
+				},
 				"role": map[string]interface{}{
 					"type":        "string",
-					"description": "Role name. Defaults to 'main'.",
+					"description": "Role name when scope=role. Defaults to 'main'.",
 					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
 				},
 				"skill_name": map[string]interface{}{
 					"type":        "string",
@@ -478,31 +546,28 @@ func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate Runt
 			"required": []string{"skill_name", "enabled"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
-			role := strings.TrimSpace(asString(params["role"]))
-			if role == "" {
-				role = "main"
-			}
-			if !isSafeIdent(role) {
-				return marshalSkillsSetEnabledError(role, "", fmt.Sprintf("invalid role: %s", role)), nil
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "role")
+			if err != nil {
+				return marshalSkillsSetEnabledError("", "", err.Error()), nil
 			}
 
 			name := strings.TrimSpace(asString(params["skill_name"]))
 			if name == "" {
-				return marshalSkillsSetEnabledError(role, "", "skill_name is required"), nil
+				return marshalSkillsSetEnabledError(target.Role, "", "skill_name is required"), nil
 			}
 			if !isSafeIdent(name) {
-				return marshalSkillsSetEnabledError(role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
+				return marshalSkillsSetEnabledError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
 			enabled, ok := params["enabled"].(bool)
 			if !ok {
-				return marshalSkillsSetEnabledError(role, "", "enabled must be boolean"), nil
+				return marshalSkillsSetEnabledError(target.Role, "", "enabled must be boolean"), nil
 			}
 
-			roleDir := skillsRoleBaseDir(workspaceDir, skillsRoleDir, role)
-			skillDir := filepath.Join(roleDir, name)
+			skillsDir := extensions.AgentsSkillsDir(target.RootDir)
+			skillDir := filepath.Join(skillsDir, name)
 			if !dirExists(skillDir) {
-				return marshalSkillsSetEnabledError(role, skillDir, "skill directory not found"), nil
+				return marshalSkillsSetEnabledError(target.Role, skillDir, "skill directory not found"), nil
 			}
 
 			disabledFile := filepath.Join(skillDir, ".disabled")
@@ -525,7 +590,10 @@ func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate Runt
 
 			out, _ := json.Marshal(skillsSetEnabledResult{
 				Success:  true,
-				Role:     role,
+				Scope:    target.Scope,
+				Role:     target.Role,
+				RepoDir:  target.RepoDir,
+				RootDir:  target.RootDir,
 				Name:     name,
 				Dir:      skillDir,
 				Enabled:  enabled,

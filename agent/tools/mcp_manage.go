@@ -31,6 +31,10 @@ type mcpServerView struct {
 
 type mcpListResult struct {
 	Success bool            `json:"success"`
+	Scope   string          `json:"scope,omitempty"`
+	Role    string          `json:"role,omitempty"`
+	RepoDir string          `json:"repo_dir,omitempty"`
+	RootDir string          `json:"root_dir,omitempty"`
 	Path    string          `json:"path"`
 	Servers []mcpServerView `json:"servers"`
 	Message string          `json:"message,omitempty"`
@@ -39,6 +43,10 @@ type mcpListResult struct {
 
 type mcpPutServerResult struct {
 	Success  bool          `json:"success"`
+	Scope    string        `json:"scope,omitempty"`
+	Role     string        `json:"role,omitempty"`
+	RepoDir  string        `json:"repo_dir,omitempty"`
+	RootDir  string        `json:"root_dir,omitempty"`
 	Path     string        `json:"path"`
 	Server   mcpServerView `json:"server"`
 	Reloaded bool          `json:"reloaded"`
@@ -48,6 +56,10 @@ type mcpPutServerResult struct {
 
 type mcpDeleteServerResult struct {
 	Success  bool   `json:"success"`
+	Scope    string `json:"scope,omitempty"`
+	Role     string `json:"role,omitempty"`
+	RepoDir  string `json:"repo_dir,omitempty"`
+	RootDir  string `json:"root_dir,omitempty"`
 	Path     string `json:"path"`
 	Deleted  bool   `json:"deleted"`
 	Reloaded bool   `json:"reloaded"`
@@ -57,6 +69,10 @@ type mcpDeleteServerResult struct {
 
 type mcpSetEnabledResult struct {
 	Success  bool          `json:"success"`
+	Scope    string        `json:"scope,omitempty"`
+	Role     string        `json:"role,omitempty"`
+	RepoDir  string        `json:"repo_dir,omitempty"`
+	RootDir  string        `json:"root_dir,omitempty"`
 	Path     string        `json:"path"`
 	Server   mcpServerView `json:"server"`
 	Reloaded bool          `json:"reloaded"`
@@ -64,23 +80,60 @@ type mcpSetEnabledResult struct {
 	Error    string        `json:"error,omitempty"`
 }
 
-func NewMCPListTool(workspaceDir string) *BaseTool {
-	cfgPath := extensions.AgentsConfigPath(workspaceDir)
+type mcpErrorResult struct {
+	Success bool   `json:"success"`
+	Scope   string `json:"scope,omitempty"`
+	Role    string `json:"role,omitempty"`
+	RepoDir string `json:"repo_dir,omitempty"`
+	RootDir string `json:"root_dir,omitempty"`
+	Path    string `json:"path"`
+	Error   string `json:"error,omitempty"`
+}
+
+func NewMCPListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 	return NewBaseTool(
 		"mcp_list",
-		"List MCP servers configured for this workspace (from .agents/config.toml).",
+		"List MCP servers configured for a target scope (workspace|role|repo) from .agents/config.toml.",
 		map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: workspace|role|repo. Defaults to 'workspace'.",
+					"default":     "workspace",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "Role name when scope=role. Defaults to 'main'.",
+					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
+				},
+			},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
 			_ = ctx
-			_ = params
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "workspace")
+			if err != nil {
+				out, _ := json.Marshal(mcpErrorResult{
+					Success: false,
+					Path:    extensions.AgentsConfigPath(workspaceDir),
+					Error:   err.Error(),
+				})
+				return string(out), nil
+			}
+			cfgPath := extensions.AgentsConfigPath(target.RootDir)
 
 			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
 				out, _ := json.Marshal(mcpListResult{
 					Success: false,
+					Scope:   target.Scope,
+					Role:    target.Role,
+					RepoDir: target.RepoDir,
+					RootDir: target.RootDir,
 					Path:    cfgPath,
 					Error:   err.Error(),
 				})
@@ -100,6 +153,10 @@ func NewMCPListTool(workspaceDir string) *BaseTool {
 
 			out, _ := json.Marshal(mcpListResult{
 				Success: true,
+				Scope:   target.Scope,
+				Role:    target.Role,
+				RepoDir: target.RepoDir,
+				RootDir: target.RootDir,
 				Path:    cfgPath,
 				Servers: servers,
 				Message: fmt.Sprintf("found %d MCP servers", len(servers)),
@@ -109,14 +166,27 @@ func NewMCPListTool(workspaceDir string) *BaseTool {
 	)
 }
 
-func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.AgentsConfigPath(workspaceDir)
+func NewMCPPutServerTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"mcp_put_server",
-		"Create or update an MCP server entry in .agents/config.toml, then request runtime reload.",
+		"Create or update an MCP server entry in .agents/config.toml (workspace|role|repo), then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: workspace|role|repo. Defaults to 'workspace'.",
+					"default":     "workspace",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "Role name when scope=role. Defaults to 'main'.",
+					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
+				},
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "Server name used for tool namespacing (e.g. 'linear', 'time').",
@@ -196,12 +266,18 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 			"required": []string{"name"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "workspace")
+			if err != nil {
+				return marshalMCPError(agentsTarget{Scope: "workspace", RootDir: workspaceDir}, extensions.AgentsConfigPath(workspaceDir), err.Error()), nil
+			}
+			cfgPath := extensions.AgentsConfigPath(target.RootDir)
+
 			name := strings.TrimSpace(asString(params["name"]))
 			if name == "" {
-				return marshalMCPError(cfgPath, "name is required"), nil
+				return marshalMCPError(target, cfgPath, "name is required"), nil
 			}
 			if !isSafeIdent(name) {
-				return marshalMCPError(cfgPath, "invalid name (allowed: a-zA-Z0-9_-; must not start with '-' or '_')"), nil
+				return marshalMCPError(target, cfgPath, "invalid name (allowed: a-zA-Z0-9_-; must not start with '-' or '_')"), nil
 			}
 
 			enabled := true
@@ -223,16 +299,16 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 			}
 
 			if typ != "" && typ != "stdio" && typ != "http" && typ != "sse" {
-				return marshalMCPError(cfgPath, "type must be one of: stdio|http|sse"), nil
+				return marshalMCPError(target, cfgPath, "type must be one of: stdio|http|sse"), nil
 			}
 			if command == "" && url == "" {
-				return marshalMCPError(cfgPath, "either command (stdio) or url (http/sse) is required"), nil
+				return marshalMCPError(target, cfgPath, "either command (stdio) or url (http/sse) is required"), nil
 			}
 			if typ == "stdio" && command == "" {
-				return marshalMCPError(cfgPath, "command is required for stdio servers"), nil
+				return marshalMCPError(target, cfgPath, "command is required for stdio servers"), nil
 			}
 			if (typ == "http" || typ == "sse") && url == "" {
-				return marshalMCPError(cfgPath, "url is required for http/sse servers"), nil
+				return marshalMCPError(target, cfgPath, "url is required for http/sse servers"), nil
 			}
 
 			args := asStringSlice(params["args"])
@@ -245,7 +321,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 
 			timeoutSeconds := asInt(params["timeoutSeconds"])
 			if timeoutSeconds < 0 {
-				return marshalMCPError(cfgPath, "timeoutSeconds must be >= 0"), nil
+				return marshalMCPError(target, cfgPath, "timeoutSeconds must be >= 0"), nil
 			}
 			timeoutPtr := (*int)(nil)
 			if timeoutSeconds > 0 {
@@ -255,7 +331,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 
 			toolTimeoutSeconds := asInt(params["toolTimeoutSeconds"])
 			if toolTimeoutSeconds < 0 {
-				return marshalMCPError(cfgPath, "toolTimeoutSeconds must be >= 0"), nil
+				return marshalMCPError(target, cfgPath, "toolTimeoutSeconds must be >= 0"), nil
 			}
 			toolTimeoutPtr := (*int)(nil)
 			if toolTimeoutSeconds > 0 {
@@ -269,7 +345,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 
 			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			cfg.MCPServers[name] = extensions.MCPServerConfig{
@@ -288,7 +364,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 			}
 
 			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			reloaded := false
@@ -304,6 +380,10 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 
 			out, _ := json.Marshal(mcpPutServerResult{
 				Success:  true,
+				Scope:    target.Scope,
+				Role:     target.Role,
+				RepoDir:  target.RepoDir,
+				RootDir:  target.RootDir,
 				Path:     cfgPath,
 				Server:   toMCPView(name, cfg.MCPServers[name]),
 				Reloaded: reloaded,
@@ -314,14 +394,27 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 	)
 }
 
-func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.AgentsConfigPath(workspaceDir)
+func NewMCPDeleteServerTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"mcp_delete_server",
-		"Delete an MCP server entry from .agents/config.toml, then request runtime reload.",
+		"Delete an MCP server entry from .agents/config.toml (workspace|role|repo), then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: workspace|role|repo. Defaults to 'workspace'.",
+					"default":     "workspace",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "Role name when scope=role. Defaults to 'main'.",
+					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
+				},
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "Server name to delete.",
@@ -330,19 +423,29 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 			"required": []string{"name"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "workspace")
+			if err != nil {
+				return marshalMCPError(agentsTarget{Scope: "workspace", RootDir: workspaceDir}, extensions.AgentsConfigPath(workspaceDir), err.Error()), nil
+			}
+			cfgPath := extensions.AgentsConfigPath(target.RootDir)
+
 			name := strings.TrimSpace(asString(params["name"]))
 			if name == "" {
-				return marshalMCPError(cfgPath, "name is required"), nil
+				return marshalMCPError(target, cfgPath, "name is required"), nil
 			}
 
 			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			if _, ok := cfg.MCPServers[name]; !ok {
 				out, _ := json.Marshal(mcpDeleteServerResult{
 					Success: false,
+					Scope:   target.Scope,
+					Role:    target.Role,
+					RepoDir: target.RepoDir,
+					RootDir: target.RootDir,
 					Path:    cfgPath,
 					Deleted: false,
 					Error:   "server not found",
@@ -352,7 +455,7 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 
 			delete(cfg.MCPServers, name)
 			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			reloaded := false
@@ -368,6 +471,10 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 
 			out, _ := json.Marshal(mcpDeleteServerResult{
 				Success:  true,
+				Scope:    target.Scope,
+				Role:     target.Role,
+				RepoDir:  target.RepoDir,
+				RootDir:  target.RootDir,
 				Path:     cfgPath,
 				Deleted:  true,
 				Reloaded: reloaded,
@@ -378,14 +485,27 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 	)
 }
 
-func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.AgentsConfigPath(workspaceDir)
+func NewMCPSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"mcp_set_enabled",
-		"Enable or disable an MCP server entry in .agents/config.toml, then request runtime reload.",
+		"Enable or disable an MCP server entry in .agents/config.toml (workspace|role|repo), then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"scope": map[string]interface{}{
+					"type":        "string",
+					"description": "Target scope: workspace|role|repo. Defaults to 'workspace'.",
+					"default":     "workspace",
+				},
+				"role": map[string]interface{}{
+					"type":        "string",
+					"description": "Role name when scope=role. Defaults to 'main'.",
+					"default":     "main",
+				},
+				"repo_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Repo directory when scope=repo. Must be within workspace (relative paths are resolved under workspace).",
+				},
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "Server name.",
@@ -398,24 +518,34 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 			"required": []string{"name", "enabled"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			target, err := resolveAgentsTarget(workspaceDir, skillsRoleDir, params, "workspace")
+			if err != nil {
+				return marshalMCPError(agentsTarget{Scope: "workspace", RootDir: workspaceDir}, extensions.AgentsConfigPath(workspaceDir), err.Error()), nil
+			}
+			cfgPath := extensions.AgentsConfigPath(target.RootDir)
+
 			name := strings.TrimSpace(asString(params["name"]))
 			if name == "" {
-				return marshalMCPError(cfgPath, "name is required"), nil
+				return marshalMCPError(target, cfgPath, "name is required"), nil
 			}
 			enabled, ok := params["enabled"].(bool)
 			if !ok {
-				return marshalMCPError(cfgPath, "enabled must be boolean"), nil
+				return marshalMCPError(target, cfgPath, "enabled must be boolean"), nil
 			}
 
 			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			srv, exists := cfg.MCPServers[name]
 			if !exists {
 				out, _ := json.Marshal(mcpSetEnabledResult{
 					Success: false,
+					Scope:   target.Scope,
+					Role:    target.Role,
+					RepoDir: target.RepoDir,
+					RootDir: target.RootDir,
 					Path:    cfgPath,
 					Error:   "server not found",
 				})
@@ -425,7 +555,7 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 			srv.Enabled = &enabled
 			cfg.MCPServers[name] = srv
 			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
-				return marshalMCPError(cfgPath, err.Error()), nil
+				return marshalMCPError(target, cfgPath, err.Error()), nil
 			}
 
 			reloaded := false
@@ -441,6 +571,10 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 
 			out, _ := json.Marshal(mcpSetEnabledResult{
 				Success:  true,
+				Scope:    target.Scope,
+				Role:     target.Role,
+				RepoDir:  target.RepoDir,
+				RootDir:  target.RootDir,
 				Path:     cfgPath,
 				Server:   toMCPView(name, srv),
 				Reloaded: reloaded,
@@ -481,9 +615,13 @@ func toMCPView(name string, srv extensions.MCPServerConfig) mcpServerView {
 	}
 }
 
-func marshalMCPError(path string, msg string) string {
-	out, _ := json.Marshal(mcpPutServerResult{
+func marshalMCPError(target agentsTarget, path string, msg string) string {
+	out, _ := json.Marshal(mcpErrorResult{
 		Success: false,
+		Scope:   target.Scope,
+		Role:    target.Role,
+		RepoDir: target.RepoDir,
+		RootDir: target.RootDir,
 		Path:    path,
 		Error:   msg,
 	})

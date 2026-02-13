@@ -166,10 +166,10 @@ func runTUI(cmd *cobra.Command, args []string) {
 		tools.NewSkillsPutTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewSkillsDeleteTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewSkillsSetEnabledTool(workspace, skillsRoleDir, invalidateRuntime),
-		tools.NewMCPListTool(workspace),
-		tools.NewMCPPutServerTool(workspace, invalidateRuntime),
-		tools.NewMCPDeleteServerTool(workspace, invalidateRuntime),
-		tools.NewMCPSetEnabledTool(workspace, invalidateRuntime),
+		tools.NewMCPListTool(workspace, skillsRoleDir),
+		tools.NewMCPPutServerTool(workspace, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPDeleteServerTool(workspace, skillsRoleDir, invalidateRuntime),
+		tools.NewMCPSetEnabledTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewRuntimeReloadTool(invalidateRuntime),
 	} {
 		if tool == nil {

@@ -352,6 +352,15 @@ goclaw searches for config in this order:
 
 If `--config` is provided, it overrides the search order above.
 
+### Agent Extensions (`.agents/`)
+
+In addition to `config.json`, goclaw uses a convention-based **`.agents/` directory** to store agent-managed extensions and runtime configuration (file-based, auditable, Git-friendly):
+
+- MCP servers: `<root>/.agents/config.toml`
+- Skills: `<root>/.agents/skills/<skill_name>/SKILL.md`
+
+Where `<root>` can be a workspace directory, a role pack root, or a project repository root. For subagents, higher-priority layers (e.g. repo `.agents/`) override lower-priority layers.
+
 ### Validation
 
 Test your configuration:

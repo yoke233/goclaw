@@ -14,6 +14,7 @@ import (
 	sdktool "github.com/cexll/agentsdk-go/pkg/tool"
 	agenttools "github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/extensions"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -235,7 +236,8 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 			skillsRoleDir = strings.TrimSpace(sub.SkillsRoleDir)
 		}
 	}
-	mainSkillsDir := filepath.Join(workspace, skillsRoleDir, "main")
+	mainRoleRoot := filepath.Join(workspace, skillsRoleDir, "main")
+	mainSkillsDir := extensions.AgentsSkillsDir(mainRoleRoot)
 	skillRegs, hookRegs, skillWarnings := loadAgentSDKRegistrations(mainSkillsDir)
 	for _, w := range skillWarnings {
 		logger.Warn("Main skills warning",
@@ -252,16 +254,16 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 	}
 
 	runtime, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:   workspace,
-		ModelFactory:  modelFactory,
-		SystemPrompt:  systemPrompt,
-		MaxIterations: maxIterations,
-		MaxSessions:   1000,
-		Timeout:       runtimeTimeout,
-		TaskStore:     r.taskStore,
-		Tools:         buildAgentSDKTools(r.tools.ListExisting()),
-		Skills:        skillRegs,
-		TypedHooks:    hookRegs,
+		ProjectRoot:       workspace,
+		ModelFactory:      modelFactory,
+		SystemPrompt:      systemPrompt,
+		MaxIterations:     maxIterations,
+		MaxSessions:       1000,
+		Timeout:           runtimeTimeout,
+		TaskStore:         r.taskStore,
+		Tools:             buildAgentSDKTools(r.tools.ListExisting()),
+		Skills:            skillRegs,
+		TypedHooks:        hookRegs,
 		SettingsOverrides: settingsOverrides,
 	})
 	if err != nil {
