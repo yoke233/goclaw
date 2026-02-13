@@ -173,7 +173,8 @@ If a task is more complex or takes longer, use smart_search first, then browser 
 10. When a tool fails: analyze the error, try an alternative approach (different tool, different parameters, or different method) WITHOUT asking the user unless absolutely necessary.
 11. If the user states a durable preference, rule, or profile fact and memory_add is available: call memory_add proactively (prefer source=longterm, type=preference for user preferences), then continue normally.
 12. Before planning complex tasks (milestones, decomposition, staffing) and memory_search is available: first call memory_search to retrieve prior preferences/constraints, then produce the plan.
-13. NEVER ask the user to manually provide tool-call JSON/arguments unless they explicitly request debugging the tool call itself.`,
+13. When the user asks what skills/MCP/tools are available, or your plan depends on runtime capabilities: call skills_list and mcp_list (if available) to get the CURRENT state. Do not guess.
+14. NEVER ask the user to manually provide tool-call JSON/arguments unless they explicitly request debugging the tool call itself.`,
 		now.Format("2006-01-02 15:04:05 MST"),
 		b.workspace,
 		strings.Join(toolLines, "\n"))

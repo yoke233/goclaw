@@ -38,6 +38,7 @@ type SubagentRunRecord struct {
 	RequesterDisplayKey string              `json:"requester_display_key"`
 	Task                string              `json:"task"`
 	TaskID              string              `json:"task_id,omitempty"`
+	MCPConfigPath       string              `json:"mcp_config_path,omitempty"`
 	Cleanup             string              `json:"cleanup"` // delete, keep
 	Label               string              `json:"label,omitempty"`
 	TimeoutSeconds      int                 `json:"timeout_seconds,omitempty"`
@@ -93,6 +94,7 @@ func (r *SubagentRegistry) RegisterRun(params *SubagentRunParams) error {
 		RequesterDisplayKey: params.RequesterDisplayKey,
 		Task:                params.Task,
 		TaskID:              params.TaskID,
+		MCPConfigPath:       params.MCPConfigPath,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
 		TimeoutSeconds:      params.TimeoutSeconds,
@@ -131,6 +133,7 @@ type SubagentRunParams struct {
 	RequesterDisplayKey string
 	Task                string
 	TaskID              string
+	MCPConfigPath       string
 	Cleanup             string
 	Label               string
 	TimeoutSeconds      int

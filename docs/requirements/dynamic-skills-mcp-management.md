@@ -75,6 +75,21 @@
 - goclaw 读取该文件，仅将 `enabled=true` 的 servers 转换为 agentsdk-go `SettingsOverrides.MCP.Servers` 并在 runtime 初始化时注入。
 - 变更后通过 `reload` 触发 runtime 重建，以便 MCP 工具重新注册。
 
+### 3) Subagent MCP（继承 + 覆盖）
+
+默认行为：
+
+- subagent runtime 继承父 workspace 的 MCP 配置：`<workspace>/.goclaw/mcp.json`（由 `SubagentRunRequest.WorkspaceDir` 指向父 workspace root）。
+
+可选覆盖：
+
+- `sessions_spawn` 支持可选参数 `mcp_config_path`。
+- 若提供 `mcp_config_path`，该 subagent run 将使用该文件作为 MCP 配置源（仅影响该次 run，不影响主 agent 或其他 subagent）。
+
+限制：
+
+- subagent 的 MCP 配置仅在该 subagent runtime 初始化时加载；运行中不做热加载（需要重新 spawn 才能生效）。
+
 ## 对话工具（Tooling）
 
 > 这些工具是给主 agent “自我管理”的管理面能力，不是最终业务能力。
@@ -146,4 +161,3 @@
 - 自动文件 watcher 的“实时热加载”（后续可加）。
 - 复杂的权限审批 UI（沿用现有 shell/filesystem policy）。
 - 插件二进制装载（Go plugin / wasm / node plugin 系统）。
-

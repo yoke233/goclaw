@@ -179,6 +179,15 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 			zap.String("warning", warning))
 	}
 
+	settingsOverrides, mcpWarnings := buildSubagentSDKSettingsOverrides(run.req)
+	for _, w := range mcpWarnings {
+		logger.Warn("Subagent MCP warning",
+			zap.String("run_id", runID),
+			zap.String("workspace_dir", strings.TrimSpace(run.req.WorkspaceDir)),
+			zap.String("mcp_config_path", strings.TrimSpace(run.req.MCPConfigPath)),
+			zap.String("warning", w))
+	}
+
 	timeoutSeconds := run.req.TimeoutSeconds
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 900
@@ -218,6 +227,7 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		TypedHooks:    hookRegs,
 		MaxIterations: maxIterations,
 		Timeout:       time.Duration(timeoutSeconds) * time.Second,
+		SettingsOverrides: settingsOverrides,
 	})
 	if err != nil {
 		status := RunStatusError

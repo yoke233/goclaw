@@ -38,6 +38,7 @@ type SubagentRunParams struct {
 	RequesterDisplayKey string
 	Task                string
 	TaskID              string
+	MCPConfigPath       string
 	Cleanup             string
 	Label               string
 	TimeoutSeconds      int
@@ -157,6 +158,7 @@ type SubagentSpawnToolParams struct {
 	Model             string `json:"model,omitempty"`               // 模型覆盖
 	Thinking          string `json:"thinking,omitempty"`            // 思考级别
 	RunTimeoutSeconds int    `json:"run_timeout_seconds,omitempty"` // 超时时间
+	MCPConfigPath     string `json:"mcp_config_path,omitempty"`     // MCP 配置路径覆盖
 	Cleanup           string `json:"cleanup,omitempty"`             // 清理策略
 }
 
@@ -253,6 +255,10 @@ func (t *SubagentSpawnTool) Parameters() map[string]interface{} {
 			"run_timeout_seconds": map[string]interface{}{
 				"type":        "integer",
 				"description": "Optional timeout in seconds for the sub-agent run.",
+			},
+			"mcp_config_path": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional MCP config file path for this sub-agent run. If omitted, it will inherit workspace .goclaw/mcp.json.",
 			},
 			"cleanup": map[string]interface{}{
 				"type":        "string",
@@ -364,6 +370,7 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		RequesterDisplayKey: requesterSessionKey,
 		Task:                spawnParams.Task,
 		TaskID:              spawnParams.TaskID,
+		MCPConfigPath:       spawnParams.MCPConfigPath,
 		Cleanup:             spawnParams.Cleanup,
 		Label:               spawnParams.Label,
 		TimeoutSeconds:      timeoutSeconds,
@@ -473,6 +480,13 @@ func (t *SubagentSpawnTool) parseParams(params map[string]interface{}) (*Subagen
 			result.RunTimeoutSeconds = int(v)
 		case int:
 			result.RunTimeoutSeconds = v
+		}
+	}
+
+	// 解析 mcp_config_path
+	if val, ok := params["mcp_config_path"]; ok {
+		if str, ok := val.(string); ok {
+			result.MCPConfigPath = strings.TrimSpace(str)
 		}
 	}
 

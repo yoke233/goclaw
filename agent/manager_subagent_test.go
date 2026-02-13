@@ -159,6 +159,12 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 	if spawnReq.WorkDir != wantWorkdir {
 		t.Fatalf("spawn workdir = %q, want %q", spawnReq.WorkDir, wantWorkdir)
 	}
+	if spawnReq.WorkspaceDir != tmp {
+		t.Fatalf("spawn workspace dir = %q, want %q", spawnReq.WorkspaceDir, tmp)
+	}
+	if spawnReq.MCPConfigPath != "" {
+		t.Fatalf("spawn mcp config path = %q, want empty", spawnReq.MCPConfigPath)
+	}
 	wantSkillsDir := filepath.Join(tmp, "skills", agentruntime.RoleFrontend)
 	if spawnReq.SkillsDir != wantSkillsDir {
 		t.Fatalf("spawn skills dir = %q, want %q", spawnReq.SkillsDir, wantSkillsDir)

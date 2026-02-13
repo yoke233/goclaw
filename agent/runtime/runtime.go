@@ -21,6 +21,12 @@ type SubagentRunRequest struct {
 	RunID          string
 	Task           string
 	Role           string
+	// WorkspaceDir is the root directory of the parent workspace that spawned this subagent.
+	// It is used for shared configuration such as MCP (e.g. <workspace>/.goclaw/mcp.json).
+	WorkspaceDir string
+	// MCPConfigPath optionally overrides the MCP config file path for this subagent run.
+	// When empty, the runtime falls back to WorkspaceDir (and then WorkDir as a last resort).
+	MCPConfigPath  string
 	WorkDir        string
 	SkillsDir      string
 	SystemPrompt   string
