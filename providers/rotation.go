@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -115,8 +116,9 @@ func (p *RotationProvider) ChatWithTools(ctx context.Context, messages []Message
 
 // getNextProfile 获取下一个可用的配置
 func (p *RotationProvider) getNextProfile() *ProviderProfile {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	// We mutate currentIndex for round-robin selection, so we need an exclusive lock here.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	now := time.Now()
 	available := make([]*ProviderProfile, 0, len(p.profiles))
@@ -133,6 +135,15 @@ func (p *RotationProvider) getNextProfile() *ProviderProfile {
 	if len(available) == 0 {
 		return nil
 	}
+
+	// Ensure deterministic ordering; map iteration order is random.
+	// Priority is used as the primary sort key (higher first), then name for stability.
+	sort.Slice(available, func(i, j int) bool {
+		if available[i].Priority == available[j].Priority {
+			return available[i].Name < available[j].Name
+		}
+		return available[i].Priority > available[j].Priority
+	})
 
 	// 根据策略选择配置
 	switch p.strategy {
