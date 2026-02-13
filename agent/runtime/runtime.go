@@ -18,17 +18,22 @@ type SubagentRuntime interface {
 
 // SubagentRunRequest 定义一次分身任务的执行参数。
 type SubagentRunRequest struct {
-	RunID          string
-	Task           string
-	Role           string
-	// WorkspaceDir is the root directory of the parent workspace that spawned this subagent.
-	// It is used for shared configuration such as MCP (e.g. <workspace>/.goclaw/mcp.json).
-	WorkspaceDir string
-	// MCPConfigPath optionally overrides the MCP config file path for this subagent run.
-	// When empty, the runtime falls back to WorkspaceDir (and then WorkDir as a last resort).
+	RunID string
+	Task  string
+	Role  string
+	// GoClawDir is the main agent's base directory (shared fallback layer).
+	// When RoleDir is valid, GoClawDir is ignored to avoid leaking main-agent
+	// configuration into role-isolated subagent runs.
+	GoClawDir string
+	// RoleDir is the role pack directory (role layer). When valid, it becomes
+	// the base layer for skills/MCP config and fully replaces GoClawDir.
+	RoleDir string
+	// RepoDir is the project/repo root directory for this run (overlay layer).
+	// It is always merged on top of the base layer and has the highest priority.
+	RepoDir string
+	// MCPConfigPath optionally overrides the MCP config file path for this run.
+	// When set, it wins over any layered .agents/config.toml files.
 	MCPConfigPath  string
-	WorkDir        string
-	SkillsDir      string
 	SystemPrompt   string
 	TimeoutSeconds int
 }

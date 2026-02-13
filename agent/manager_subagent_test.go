@@ -155,19 +155,19 @@ func TestHandleSubagentSpawnBuildsRuntimeRequestAndMarksCompleted(t *testing.T) 
 	if spawnReq.TimeoutSeconds != 123 {
 		t.Fatalf("spawn timeout = %d, want 123", spawnReq.TimeoutSeconds)
 	}
-	wantWorkdir := filepath.Join(tmp, "subagents", "run-1", "workspace")
-	if spawnReq.WorkDir != wantWorkdir {
-		t.Fatalf("spawn workdir = %q, want %q", spawnReq.WorkDir, wantWorkdir)
+	wantRepoDir := filepath.Join(tmp, "subagents", "run-1", "repo")
+	if spawnReq.RepoDir != wantRepoDir {
+		t.Fatalf("spawn repo dir = %q, want %q", spawnReq.RepoDir, wantRepoDir)
 	}
-	if spawnReq.WorkspaceDir != tmp {
-		t.Fatalf("spawn workspace dir = %q, want %q", spawnReq.WorkspaceDir, tmp)
+	if spawnReq.GoClawDir != tmp {
+		t.Fatalf("spawn goclaw dir = %q, want %q", spawnReq.GoClawDir, tmp)
 	}
 	if spawnReq.MCPConfigPath != "" {
 		t.Fatalf("spawn mcp config path = %q, want empty", spawnReq.MCPConfigPath)
 	}
-	wantSkillsDir := filepath.Join(tmp, "skills", agentruntime.RoleFrontend)
-	if spawnReq.SkillsDir != wantSkillsDir {
-		t.Fatalf("spawn skills dir = %q, want %q", spawnReq.SkillsDir, wantSkillsDir)
+	wantRoleDir := filepath.Join(tmp, "skills", agentruntime.RoleFrontend)
+	if spawnReq.RoleDir != wantRoleDir {
+		t.Fatalf("spawn role dir = %q, want %q", spawnReq.RoleDir, wantRoleDir)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)

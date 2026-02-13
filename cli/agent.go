@@ -379,6 +379,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 	if err := sessionMgr.Save(sess); err != nil && agentVerbose {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to save session: %v\n", err)
 	}
+	exportSessionMarkdown(cfg, sessionMgr, sess, agentVerbose)
 
 	// Output response
 	if agentJSON {
@@ -429,6 +430,44 @@ func parseSessionKey(sessionKey string) (channel string, accountID string, chatI
 		return "cli", "default", strings.TrimSpace(parts[0])
 	default:
 		return "cli", "default", "default"
+	}
+}
+
+func exportSessionMarkdown(cfg *config.Config, sessionMgr *session.Manager, sess *session.Session, verbose bool) {
+	if cfg == nil || sessionMgr == nil || sess == nil {
+		return
+	}
+
+	memCfg := cfg.Memory
+	if strings.TrimSpace(memCfg.Backend) != "" && strings.TrimSpace(memCfg.Backend) != "memsearch" {
+		return
+	}
+
+	ms := memCfg.Memsearch
+	if !ms.Sessions.Enabled {
+		return
+	}
+
+	exportDir := strings.TrimSpace(ms.Sessions.ExportDir)
+	if exportDir == "" {
+		homeDir, err := config.ResolveUserHomeDir()
+		if err != nil {
+			return
+		}
+		exportDir = filepath.Join(homeDir, ".goclaw", "sessions", "export")
+	}
+	exportDir = config.ExpandUserPath(exportDir)
+	if exportDir == "" {
+		return
+	}
+
+	jsonlPath := sessionMgr.SessionPath(sess.Key)
+	if strings.TrimSpace(jsonlPath) == "" {
+		return
+	}
+
+	if _, err := memory.ExportSessionJSONLToMarkdown(jsonlPath, exportDir, ms.Sessions.Redact); err != nil && verbose {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to export session markdown: %v\n", err)
 	}
 }
 

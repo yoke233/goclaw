@@ -14,32 +14,36 @@ import (
 type RuntimeInvalidator func(ctx context.Context, agentID string) error
 
 type mcpServerView struct {
-	Name           string            `json:"name"`
-	Enabled        bool              `json:"enabled"`
-	Type           string            `json:"type"`
-	Command        string            `json:"command,omitempty"`
-	Args           []string          `json:"args,omitempty"`
-	URL            string            `json:"url,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
+	Name               string            `json:"name"`
+	Enabled            bool              `json:"enabled"`
+	Type               string            `json:"type,omitempty"`
+	Command            string            `json:"command,omitempty"`
+	Args               []string          `json:"args,omitempty"`
+	URL                string            `json:"url,omitempty"`
+	Env                map[string]string `json:"env,omitempty"`
+	Headers            map[string]string `json:"headers,omitempty"`
+	BearerTokenEnvVar  string            `json:"bearer_token_env_var,omitempty"`
+	EnabledTools       []string          `json:"enabled_tools,omitempty"`
+	DisabledTools      []string          `json:"disabled_tools,omitempty"`
+	TimeoutSeconds     int               `json:"timeoutSeconds,omitempty"`
+	ToolTimeoutSeconds int               `json:"toolTimeoutSeconds,omitempty"`
 }
 
 type mcpListResult struct {
-	Success bool           `json:"success"`
-	Path    string         `json:"path"`
+	Success bool            `json:"success"`
+	Path    string          `json:"path"`
 	Servers []mcpServerView `json:"servers"`
-	Message string         `json:"message,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	Message string          `json:"message,omitempty"`
+	Error   string          `json:"error,omitempty"`
 }
 
 type mcpPutServerResult struct {
-	Success   bool         `json:"success"`
-	Path      string       `json:"path"`
-	Server    mcpServerView `json:"server"`
-	Reloaded  bool         `json:"reloaded"`
-	Message   string       `json:"message,omitempty"`
-	Error     string       `json:"error,omitempty"`
+	Success  bool          `json:"success"`
+	Path     string        `json:"path"`
+	Server   mcpServerView `json:"server"`
+	Reloaded bool          `json:"reloaded"`
+	Message  string        `json:"message,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 type mcpDeleteServerResult struct {
@@ -52,27 +56,28 @@ type mcpDeleteServerResult struct {
 }
 
 type mcpSetEnabledResult struct {
-	Success  bool         `json:"success"`
-	Path     string       `json:"path"`
+	Success  bool          `json:"success"`
+	Path     string        `json:"path"`
 	Server   mcpServerView `json:"server"`
-	Reloaded bool         `json:"reloaded"`
-	Message  string       `json:"message,omitempty"`
-	Error    string       `json:"error,omitempty"`
+	Reloaded bool          `json:"reloaded"`
+	Message  string        `json:"message,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 func NewMCPListTool(workspaceDir string) *BaseTool {
-	cfgPath := extensions.MCPConfigPath(workspaceDir)
+	cfgPath := extensions.AgentsConfigPath(workspaceDir)
 	return NewBaseTool(
 		"mcp_list",
-		"List MCP servers configured for this workspace (from .goclaw/mcp.json).",
+		"List MCP servers configured for this workspace (from .agents/config.toml).",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
+			_ = ctx
 			_ = params
 
-			cfg, err := extensions.LoadMCPConfig(cfgPath)
+			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
 				out, _ := json.Marshal(mcpListResult{
 					Success: false,
@@ -82,26 +87,15 @@ func NewMCPListTool(workspaceDir string) *BaseTool {
 				return string(out), nil
 			}
 
-			names := make([]string, 0, len(cfg.Servers))
-			for name := range cfg.Servers {
+			names := make([]string, 0, len(cfg.MCPServers))
+			for name := range cfg.MCPServers {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 
 			servers := make([]mcpServerView, 0, len(names))
 			for _, name := range names {
-				s := cfg.Servers[name]
-				servers = append(servers, mcpServerView{
-					Name:           name,
-					Enabled:        s.Enabled,
-					Type:           s.Type,
-					Command:        s.Command,
-					Args:           append([]string(nil), s.Args...),
-					URL:            s.URL,
-					Env:            cloneStringMap(s.Env),
-					Headers:        cloneStringMap(s.Headers),
-					TimeoutSeconds: s.TimeoutSeconds,
-				})
+				servers = append(servers, toMCPView(name, cfg.MCPServers[name]))
 			}
 
 			out, _ := json.Marshal(mcpListResult{
@@ -116,10 +110,10 @@ func NewMCPListTool(workspaceDir string) *BaseTool {
 }
 
 func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.MCPConfigPath(workspaceDir)
+	cfgPath := extensions.AgentsConfigPath(workspaceDir)
 	return NewBaseTool(
 		"mcp_put_server",
-		"Create or update an MCP server entry in .goclaw/mcp.json, then request runtime reload.",
+		"Create or update an MCP server entry in .agents/config.toml, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -134,7 +128,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 				},
 				"type": map[string]interface{}{
 					"type":        "string",
-					"description": "Transport type: stdio|http|sse.",
+					"description": "Transport type: stdio|http|sse. Optional when inferrable from command/url.",
 				},
 				"command": map[string]interface{}{
 					"type":        "string",
@@ -160,8 +154,33 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 				},
 				"headers": map[string]interface{}{
 					"type":        "object",
-					"description": "Optional headers for http/sse transports.",
+					"description": "Optional headers for http/sse transports (alias: http_headers).",
 					"additionalProperties": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"http_headers": map[string]interface{}{
+					"type":        "object",
+					"description": "Preferred key name for headers in config.toml (alias: headers).",
+					"additionalProperties": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"bearer_token_env_var": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional env var name to read a bearer token from (generates Authorization header).",
+				},
+				"enabled_tools": map[string]interface{}{
+					"type":        "array",
+					"description": "Optional allowlist of tools for this MCP server.",
+					"items": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"disabled_tools": map[string]interface{}{
+					"type":        "array",
+					"description": "Optional denylist of tools for this MCP server.",
+					"items": map[string]interface{}{
 						"type": "string",
 					},
 				},
@@ -169,8 +188,12 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 					"type":        "integer",
 					"description": "Optional per-transport timeout in seconds.",
 				},
+				"toolTimeoutSeconds": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional per-tool-call timeout in seconds for MCP tools.",
+				},
 			},
-			"required": []string{"name", "type"},
+			"required": []string{"name"},
 		},
 		func(ctx context.Context, params map[string]interface{}) (string, error) {
 			name := strings.TrimSpace(asString(params["name"]))
@@ -187,49 +210,84 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 			}
 
 			typ := strings.ToLower(strings.TrimSpace(asString(params["type"])))
-			switch typ {
-			case "stdio", "http", "sse":
-			default:
-				return marshalMCPError(cfgPath, "type must be one of: stdio|http|sse"), nil
-			}
-
 			command := strings.TrimSpace(asString(params["command"]))
 			url := strings.TrimSpace(asString(params["url"]))
+
+			if typ == "" {
+				switch {
+				case command != "":
+					typ = "stdio"
+				case url != "":
+					typ = "http"
+				}
+			}
+
+			if typ != "" && typ != "stdio" && typ != "http" && typ != "sse" {
+				return marshalMCPError(cfgPath, "type must be one of: stdio|http|sse"), nil
+			}
+			if command == "" && url == "" {
+				return marshalMCPError(cfgPath, "either command (stdio) or url (http/sse) is required"), nil
+			}
+			if typ == "stdio" && command == "" {
+				return marshalMCPError(cfgPath, "command is required for stdio servers"), nil
+			}
+			if (typ == "http" || typ == "sse") && url == "" {
+				return marshalMCPError(cfgPath, "url is required for http/sse servers"), nil
+			}
+
 			args := asStringSlice(params["args"])
 			env := asStringMap(params["env"])
+
 			headers := asStringMap(params["headers"])
+			if len(headers) == 0 {
+				headers = asStringMap(params["http_headers"])
+			}
+
 			timeoutSeconds := asInt(params["timeoutSeconds"])
 			if timeoutSeconds < 0 {
 				return marshalMCPError(cfgPath, "timeoutSeconds must be >= 0"), nil
 			}
-
-			if typ == "stdio" {
-				if command == "" {
-					return marshalMCPError(cfgPath, "command is required for stdio servers"), nil
-				}
-			} else {
-				if url == "" {
-					return marshalMCPError(cfgPath, "url is required for http/sse servers"), nil
-				}
+			timeoutPtr := (*int)(nil)
+			if timeoutSeconds > 0 {
+				v := timeoutSeconds
+				timeoutPtr = &v
 			}
 
-			cfg, err := extensions.LoadMCPConfig(cfgPath)
+			toolTimeoutSeconds := asInt(params["toolTimeoutSeconds"])
+			if toolTimeoutSeconds < 0 {
+				return marshalMCPError(cfgPath, "toolTimeoutSeconds must be >= 0"), nil
+			}
+			toolTimeoutPtr := (*int)(nil)
+			if toolTimeoutSeconds > 0 {
+				v := toolTimeoutSeconds
+				toolTimeoutPtr = &v
+			}
+
+			bearerTokenEnvVar := strings.TrimSpace(asString(params["bearer_token_env_var"]))
+			enabledTools := asStringSlice(params["enabled_tools"])
+			disabledTools := asStringSlice(params["disabled_tools"])
+
+			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
-			cfg.Servers[name] = extensions.MCPServer{
-				Enabled:        enabled,
-				Type:           typ,
-				Command:        command,
-				Args:           args,
-				URL:            url,
-				Env:            env,
-				Headers:        headers,
-				TimeoutSeconds: timeoutSeconds,
+			cfg.MCPServers[name] = extensions.MCPServerConfig{
+				Enabled:           &enabled,
+				Type:              strings.TrimSpace(typ),
+				Command:           command,
+				Args:              args,
+				URL:               url,
+				Env:               env,
+				HTTPHeaders:       headers,
+				BearerTokenEnvVar: bearerTokenEnvVar,
+				EnabledTools:      enabledTools,
+				DisabledTools:     disabledTools,
+				StartupTimeoutSec: timeoutPtr,
+				ToolTimeoutSec:    toolTimeoutPtr,
 			}
 
-			if err := extensions.SaveMCPConfig(cfgPath, cfg); err != nil {
+			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
@@ -247,7 +305,7 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 			out, _ := json.Marshal(mcpPutServerResult{
 				Success:  true,
 				Path:     cfgPath,
-				Server:   toMCPView(name, cfg.Servers[name]),
+				Server:   toMCPView(name, cfg.MCPServers[name]),
 				Reloaded: reloaded,
 				Message:  "server saved",
 			})
@@ -257,10 +315,10 @@ func NewMCPPutServerTool(workspaceDir string, invalidate RuntimeInvalidator) *Ba
 }
 
 func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.MCPConfigPath(workspaceDir)
+	cfgPath := extensions.AgentsConfigPath(workspaceDir)
 	return NewBaseTool(
 		"mcp_delete_server",
-		"Delete an MCP server entry from .goclaw/mcp.json, then request runtime reload.",
+		"Delete an MCP server entry from .agents/config.toml, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -277,12 +335,12 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 				return marshalMCPError(cfgPath, "name is required"), nil
 			}
 
-			cfg, err := extensions.LoadMCPConfig(cfgPath)
+			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
-			if _, ok := cfg.Servers[name]; !ok {
+			if _, ok := cfg.MCPServers[name]; !ok {
 				out, _ := json.Marshal(mcpDeleteServerResult{
 					Success: false,
 					Path:    cfgPath,
@@ -292,8 +350,8 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 				return string(out), nil
 			}
 
-			delete(cfg.Servers, name)
-			if err := extensions.SaveMCPConfig(cfgPath, cfg); err != nil {
+			delete(cfg.MCPServers, name)
+			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
@@ -321,10 +379,10 @@ func NewMCPDeleteServerTool(workspaceDir string, invalidate RuntimeInvalidator) 
 }
 
 func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *BaseTool {
-	cfgPath := extensions.MCPConfigPath(workspaceDir)
+	cfgPath := extensions.AgentsConfigPath(workspaceDir)
 	return NewBaseTool(
 		"mcp_set_enabled",
-		"Enable or disable an MCP server entry in .goclaw/mcp.json, then request runtime reload.",
+		"Enable or disable an MCP server entry in .agents/config.toml, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -349,12 +407,12 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 				return marshalMCPError(cfgPath, "enabled must be boolean"), nil
 			}
 
-			cfg, err := extensions.LoadMCPConfig(cfgPath)
+			cfg, err := extensions.LoadAgentsConfig(cfgPath)
 			if err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
-			srv, exists := cfg.Servers[name]
+			srv, exists := cfg.MCPServers[name]
 			if !exists {
 				out, _ := json.Marshal(mcpSetEnabledResult{
 					Success: false,
@@ -364,9 +422,9 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 				return string(out), nil
 			}
 
-			srv.Enabled = enabled
-			cfg.Servers[name] = srv
-			if err := extensions.SaveMCPConfig(cfgPath, cfg); err != nil {
+			srv.Enabled = &enabled
+			cfg.MCPServers[name] = srv
+			if err := extensions.SaveAgentsConfig(cfgPath, cfg); err != nil {
 				return marshalMCPError(cfgPath, err.Error()), nil
 			}
 
@@ -393,17 +451,33 @@ func NewMCPSetEnabledTool(workspaceDir string, invalidate RuntimeInvalidator) *B
 	)
 }
 
-func toMCPView(name string, srv extensions.MCPServer) mcpServerView {
+func toMCPView(name string, srv extensions.MCPServerConfig) mcpServerView {
+	enabled := true
+	if srv.Enabled != nil {
+		enabled = *srv.Enabled
+	}
+	timeoutSeconds := 0
+	if srv.StartupTimeoutSec != nil && *srv.StartupTimeoutSec > 0 {
+		timeoutSeconds = *srv.StartupTimeoutSec
+	}
+	toolTimeoutSeconds := 0
+	if srv.ToolTimeoutSec != nil && *srv.ToolTimeoutSec > 0 {
+		toolTimeoutSeconds = *srv.ToolTimeoutSec
+	}
 	return mcpServerView{
-		Name:           name,
-		Enabled:        srv.Enabled,
-		Type:           srv.Type,
-		Command:        srv.Command,
-		Args:           append([]string(nil), srv.Args...),
-		URL:            srv.URL,
-		Env:            cloneStringMap(srv.Env),
-		Headers:        cloneStringMap(srv.Headers),
-		TimeoutSeconds: srv.TimeoutSeconds,
+		Name:               name,
+		Enabled:            enabled,
+		Type:               strings.TrimSpace(srv.Type),
+		Command:            strings.TrimSpace(srv.Command),
+		Args:               append([]string(nil), srv.Args...),
+		URL:                strings.TrimSpace(srv.URL),
+		Env:                cloneStringMap(srv.Env),
+		Headers:            cloneStringMap(srv.HTTPHeaders),
+		BearerTokenEnvVar:  strings.TrimSpace(srv.BearerTokenEnvVar),
+		EnabledTools:       append([]string(nil), srv.EnabledTools...),
+		DisabledTools:      append([]string(nil), srv.DisabledTools...),
+		TimeoutSeconds:     timeoutSeconds,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
 	}
 }
 
@@ -522,4 +596,3 @@ func isSafeIdent(name string) bool {
 	}
 	return true
 }
-

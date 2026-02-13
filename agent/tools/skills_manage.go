@@ -21,12 +21,12 @@ type skillListItem struct {
 }
 
 type skillsListResult struct {
-	Success bool           `json:"success"`
-	Role    string         `json:"role"`
-	BaseDir string         `json:"base_dir"`
+	Success bool            `json:"success"`
+	Role    string          `json:"role"`
+	BaseDir string          `json:"base_dir"`
 	Skills  []skillListItem `json:"skills"`
-	Message string         `json:"message,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	Message string          `json:"message,omitempty"`
+	Error   string          `json:"error,omitempty"`
 }
 
 type skillsGetResult struct {
@@ -44,35 +44,35 @@ type skillsGetResult struct {
 }
 
 type skillsPutResult struct {
-	Success  bool `json:"success"`
-	Role     string `json:"role"`
-	Name     string `json:"name"`
-	Dir      string `json:"dir"`
+	Success   bool   `json:"success"`
+	Role      string `json:"role"`
+	Name      string `json:"name"`
+	Dir       string `json:"dir"`
 	SkillFile string `json:"skill_file"`
-	Enabled  bool `json:"enabled"`
-	Reloaded bool `json:"reloaded"`
-	Message  string `json:"message,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	Reloaded  bool   `json:"reloaded"`
+	Message   string `json:"message,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 type skillsDeleteResult struct {
-	Success  bool `json:"success"`
+	Success  bool   `json:"success"`
 	Role     string `json:"role"`
 	Name     string `json:"name"`
 	Dir      string `json:"dir"`
-	Deleted  bool `json:"deleted"`
-	Reloaded bool `json:"reloaded"`
+	Deleted  bool   `json:"deleted"`
+	Reloaded bool   `json:"reloaded"`
 	Message  string `json:"message,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
 type skillsSetEnabledResult struct {
-	Success  bool `json:"success"`
+	Success  bool   `json:"success"`
 	Role     string `json:"role"`
 	Name     string `json:"name"`
 	Dir      string `json:"dir"`
-	Enabled  bool `json:"enabled"`
-	Reloaded bool `json:"reloaded"`
+	Enabled  bool   `json:"enabled"`
+	Reloaded bool   `json:"reloaded"`
 	Message  string `json:"message,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
@@ -80,7 +80,7 @@ type skillsSetEnabledResult struct {
 func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 	return NewBaseTool(
 		"skills_list",
-		"List skills for a given role under the workspace skills directory.",
+		"List skills for a given role under the role pack .agents/skills directory.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -181,7 +181,7 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 	return NewBaseTool(
 		"skills_get",
-		"Get a skill's SKILL.md content for a given role.",
+		"Get a skill's SKILL.md content for a given role (from role pack .agents/skills).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -264,7 +264,7 @@ func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_put",
-		"Create or update a skill (writes SKILL.md) under workspace skills/<role>/<skill_name>, then request runtime reload.",
+		"Create or update a skill (writes SKILL.md) under <workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -378,7 +378,7 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_delete",
-		"Delete a skill directory under workspace skills/<role>/<skill_name>, then request runtime reload.",
+		"Delete a skill directory under <workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -457,7 +457,7 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInvalidator) *BaseTool {
 	return NewBaseTool(
 		"skills_set_enabled",
-		"Enable or disable a skill by toggling its .disabled file, then request runtime reload.",
+		"Enable or disable a skill (role pack .agents/skills) by toggling its .disabled file, then request runtime reload.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -546,7 +546,8 @@ func skillsRoleBaseDir(workspaceDir, skillsRoleDir, role string) string {
 	if role == "" {
 		role = "main"
 	}
-	return filepath.Join(workspaceDir, base, role)
+	roleRoot := filepath.Join(workspaceDir, base, role)
+	return filepath.Join(roleRoot, ".agents", "skills")
 }
 
 func resolveSkillFile(skillDir string) string {
@@ -617,4 +618,3 @@ func marshalSkillsSetEnabledError(role, dir, msg string) string {
 	})
 	return string(out)
 }
-

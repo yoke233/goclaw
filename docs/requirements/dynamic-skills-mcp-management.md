@@ -14,12 +14,14 @@
 
 ## 术语与约定
 
-- **workspace**：goclaw 配置中 `workspace.path` 指向的目录（通常是某个项目根目录）。
-- **role skills**：按角色隔离的 skills 目录（例如 `skills/frontend/*`、`skills/backend/*`）。
-- **主 agent role**：约定为 `main`，其 skills 位于 `skills/main/*`。
-- **skill 目录结构**：`<role_dir>/<skill_name>/SKILL.md`（允许 `skill.md` 兼容，但写入统一用 `SKILL.md`）。
+- **workspace**：goclaw 配置中 `workspace.path` 指向的目录（通常是主 agent 的工作目录）。
+- **.agents**：面向 agent 的能力与配置目录（文件即真相），统一使用：
+  - skills：`<root>/.agents/skills/<skill_name>/SKILL.md`
+  - config：`<root>/.agents/config.toml`
+- **skill 目录结构**：`<root>/.agents/skills/<skill_name>/SKILL.md`（允许 `skill.md` 兼容，但写入统一用 `SKILL.md`）。
 - **禁用 skill**：在 skill 目录下存在 `.disabled` 哨兵文件则视为禁用。
-- **MCP 配置文件**：`<workspace>/.goclaw/mcp.json`（由 goclaw 管理，供运行时注入 agentsdk-go 的 settings overrides）。
+- **MCP 配置文件**：`<root>/.agents/config.toml`（由 goclaw 管理，供运行时注入 agentsdk-go 的 settings overrides）。
+- **subagent 三层输入**：`goclawdir / roledir / repodir`，用于实现“角色隔离 + 项目覆盖”。详见：`docs/requirements/subagent-layering-and-agents-dir.md`。
 
 ## 设计原则
 
@@ -31,75 +33,60 @@
 
 ## 数据模型
 
-### 1) Skills（按角色）
+### 1) Skills（.agents 目录）
 
 目录：
 
-- `<workspace>/<skills_role_dir>/main/<skill>/SKILL.md`
-- `<workspace>/<skills_role_dir>/frontend/<skill>/SKILL.md`
-- `<workspace>/<skills_role_dir>/backend/<skill>/SKILL.md`
-
-其中 `<skills_role_dir>` 默认来自配置 `agents.defaults.subagents.skills_role_dir`（默认 `skills`）。
+- `<root>/.agents/skills/<skill>/SKILL.md`
 
 启用/禁用：
 
 - 启用：不存在 `<skill_dir>/.disabled`
 - 禁用：存在 `<skill_dir>/.disabled`（文件内容可为空）
 
-### 2) MCP（workspace 级）
+### 2) MCP（.agents/config.toml）
 
-文件：`<workspace>/.goclaw/mcp.json`
+文件：`<root>/.agents/config.toml`
 
-建议 schema（v1）：
+建议 schema（v1，节选 MCP 部分）：
 
-```json
-{
-  "version": 1,
-  "servers": {
-    "time": {
-      "enabled": true,
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["mcp-server-time"],
-      "url": "",
-      "env": {},
-      "headers": {},
-      "timeoutSeconds": 10
-    }
-  }
-}
+```toml
+[mcp_servers.time]
+enabled = true
+command = "uvx"
+args = ["mcp-server-time"]
+startup_timeout_sec = 10
+
+[mcp_servers.time.env]
+TZ = "UTC"
 ```
 
 运行时注入策略：
 
-- goclaw 读取该文件，仅将 `enabled=true` 的 servers 转换为 agentsdk-go `SettingsOverrides.MCP.Servers` 并在 runtime 初始化时注入。
+- goclaw 读取 `config.toml`，仅将 `enabled=true` 的 servers 转换为 agentsdk-go `SettingsOverrides.MCP.Servers` 并在 runtime 初始化时注入。
 - 变更后通过 `reload` 触发 runtime 重建，以便 MCP 工具重新注册。
 
-### 3) Subagent MCP（继承 + 覆盖）
+### 3) Subagent MCP（base + overlay）
 
 默认行为：
 
-- subagent runtime 继承父 workspace 的 MCP 配置：`<workspace>/.goclaw/mcp.json`（由 `SubagentRunRequest.WorkspaceDir` 指向父 workspace root）。
+- subagent runtime 使用三层合并：`baseRoot + repodir overlay`，并遵循：repodir 覆盖 baseRoot。
+- baseRoot 选择：`roledir 有效 ? roledir : goclawdir`（roledir 有效时不加载 goclawdir）。
 
 可选覆盖：
 
-- 若 subagent 工作目录存在 `"<workdir>/.goclaw/mcp.json"`，则优先使用该文件（视为该 subagent 的“私有 MCP 配置”）。
-- `sessions_spawn` 支持可选参数 `mcp_config_path`。
-- 若提供 `mcp_config_path`，该 subagent run 将使用该文件作为 MCP 配置源（仅影响该次 run，不影响主 agent 或其他 subagent）。
+- `sessions_spawn` 支持可选参数 `repo_dir` 指定 repodir（项目目录）。
+- （可选）保留显式配置文件路径覆盖（例如 `mcp_config_path`），用于一次性指定配置源。
 
 限制：
 
 - subagent 的 MCP 配置仅在该 subagent runtime 初始化时加载；运行中不做热加载（需要重新 spawn 才能生效）。
 
-### 4) Subagent Skills（继承 + 覆盖）
+### 4) Subagent Skills（base + overlay）
 
 默认行为：
 
-- subagent 使用 goclaw 的 role skills 目录（由 host 在 spawn 时传入 `SkillsDir`，通常形如：`<workspace>/<skills_role_dir>/<role>`）。
-
-可选覆盖：
-
-- 若 subagent 工作目录存在 `"<workdir>/.goclaw/skills/"`，则优先从该目录加载 skills（视为该 subagent 的“私有 skills 集”）。
+- subagent skills 采用三层合并：`baseRoot/.agents/skills + repodir/.agents/skills`（repodir 覆盖 baseRoot）。
 
 ## 对话工具（Tooling）
 
@@ -112,19 +99,19 @@
   - 出参：skills 列表（name、enabled、path、has_skill_md 等）
 
 - `skills_get`
-  - 入参：`role`，`skill_name`，`include_content`（可选，默认 true）
+  - 入参：`role`（可选，默认 `main`），`skill_name`，`include_content`（可选，默认 true）
   - 出参：skill 元信息 + SKILL.md 内容
 
 - `skills_put`
-  - 入参：`role`，`skill_name`，`skill_md`（SKILL.md 全文），`enabled`（可选），`overwrite`（可选）
-  - 行为：写入/更新 `<skill_dir>/SKILL.md`，并按 enabled 写 `.disabled`；成功后请求 runtime reload
+  - 入参：`role`（可选，默认 `main`），`skill_name`，`skill_md`（SKILL.md 全文），`enabled`（可选），`overwrite`（可选）
+  - 行为：写入/更新 `<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>/SKILL.md`，并按 enabled 写 `.disabled`；成功后请求 runtime reload
 
 - `skills_delete`
-  - 入参：`role`，`skill_name`
-  - 行为：删除 `<skill_dir>`；成功后请求 runtime reload
+  - 入参：`role`（可选，默认 `main`），`skill_name`
+  - 行为：删除 `<workspace>/<skills_role_dir>/<role>/.agents/skills/<skill_name>`；成功后请求 runtime reload
 
 - `skills_set_enabled`
-  - 入参：`role`，`skill_name`，`enabled`
+  - 入参：`role`（可选，默认 `main`），`skill_name`，`enabled`
   - 行为：增删 `.disabled`；成功后请求 runtime reload
 
 ### MCP 管理工具
@@ -133,8 +120,8 @@
   - 出参：servers 列表（name、enabled、type、command/url、timeoutSeconds）
 
 - `mcp_put_server`
-  - 入参：`name`，`enabled`，`type`，`command`/`args`/`url`，`env`，`headers`，`timeoutSeconds`
-  - 行为：写入/更新 `<workspace>/.goclaw/mcp.json`；成功后请求 runtime reload
+  - 入参：`name`，`enabled`，`type`（可选），`command`/`args`/`url`，`env`，`headers`，`timeoutSeconds` 等
+  - 行为：写入/更新 `<root>/.agents/config.toml`；成功后请求 runtime reload
 
 - `mcp_delete_server`
   - 入参：`name`

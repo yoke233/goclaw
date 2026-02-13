@@ -367,6 +367,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 				Content: response,
 			})
 			_ = sessionMgr.Save(sess)
+			exportSessionMarkdown(cfg, sessionMgr, sess)
 		}
 
 		if !tuiDeliver {
@@ -452,6 +453,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 				Content: response,
 			})
 			_ = sessionMgr.Save(sess)
+			exportSessionMarkdown(cfg, sessionMgr, sess)
 		}
 
 		// Force readline to refresh terminal state
@@ -632,6 +634,44 @@ func parseSessionKey(sessionKey string) (channel string, accountID string, chatI
 		return "cli", "default", strings.TrimSpace(parts[0])
 	default:
 		return "cli", "default", "default"
+	}
+}
+
+func exportSessionMarkdown(cfg *config.Config, sessionMgr *session.Manager, sess *session.Session) {
+	if cfg == nil || sessionMgr == nil || sess == nil {
+		return
+	}
+
+	memCfg := cfg.Memory
+	if strings.TrimSpace(memCfg.Backend) != "" && strings.TrimSpace(memCfg.Backend) != "memsearch" {
+		return
+	}
+
+	ms := memCfg.Memsearch
+	if !ms.Sessions.Enabled {
+		return
+	}
+
+	exportDir := strings.TrimSpace(ms.Sessions.ExportDir)
+	if exportDir == "" {
+		homeDir, err := config.ResolveUserHomeDir()
+		if err != nil {
+			return
+		}
+		exportDir = filepath.Join(homeDir, ".goclaw", "sessions", "export")
+	}
+	exportDir = config.ExpandUserPath(exportDir)
+	if exportDir == "" {
+		return
+	}
+
+	jsonlPath := sessionMgr.SessionPath(sess.Key)
+	if strings.TrimSpace(jsonlPath) == "" {
+		return
+	}
+
+	if _, err := memory.ExportSessionJSONLToMarkdown(jsonlPath, exportDir, ms.Sessions.Redact); err != nil {
+		logger.Warn("Failed to export session markdown", zap.Error(err))
 	}
 }
 

@@ -1,5 +1,3 @@
-//go:build !windows
-
 package runtime
 
 import (
@@ -164,20 +162,29 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	}
 	defer r.pool.Release(role)
 
-	if err := os.MkdirAll(run.req.WorkDir, 0o755); err != nil {
+	repoDir := strings.TrimSpace(run.req.RepoDir)
+	if repoDir == "" {
 		run.result = &SubagentRunResult{
 			Status:   RunStatusError,
-			ErrorMsg: fmt.Sprintf("failed to create workdir: %v", err),
+			ErrorMsg: "repo dir is empty",
+		}
+		return
+	}
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		run.result = &SubagentRunResult{
+			Status:   RunStatusError,
+			ErrorMsg: fmt.Sprintf("failed to create repo dir: %v", err),
 		}
 		return
 	}
 
-	effectiveSkillsDir := resolveSubagentSkillsDir(run.req)
-	skillsRegs, hookRegs, warnings := loadRoleRegistrations(effectiveSkillsDir)
+	skillsRegs, hookRegs, warnings := buildSubagentSkillRegistrations(run.req)
 	for _, warning := range warnings {
 		logger.Warn("Subagent skills warning",
 			zap.String("run_id", runID),
-			zap.String("skills_dir", effectiveSkillsDir),
+			zap.String("goclawdir", strings.TrimSpace(run.req.GoClawDir)),
+			zap.String("roledir", strings.TrimSpace(run.req.RoleDir)),
+			zap.String("repodir", repoDir),
 			zap.String("warning", warning))
 	}
 
@@ -185,7 +192,9 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	for _, w := range mcpWarnings {
 		logger.Warn("Subagent MCP warning",
 			zap.String("run_id", runID),
-			zap.String("workspace_dir", strings.TrimSpace(run.req.WorkspaceDir)),
+			zap.String("goclawdir", strings.TrimSpace(run.req.GoClawDir)),
+			zap.String("roledir", strings.TrimSpace(run.req.RoleDir)),
+			zap.String("repodir", repoDir),
 			zap.String("mcp_config_path", strings.TrimSpace(run.req.MCPConfigPath)),
 			zap.String("warning", w))
 	}
@@ -222,7 +231,7 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	}
 
 	rt, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:       run.req.WorkDir,
+		ProjectRoot:       repoDir,
 		ModelFactory:      modelProvider,
 		SystemPrompt:      strings.TrimSpace(run.req.SystemPrompt),
 		Skills:            skillsRegs,

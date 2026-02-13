@@ -14,6 +14,7 @@ import (
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
+	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/session"
 	"go.uber.org/zap"
 )
@@ -280,6 +281,7 @@ func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) e
 		RequesterDisplayKey: params.RequesterDisplayKey,
 		Task:                params.Task,
 		TaskID:              params.TaskID,
+		RepoDir:             params.RepoDir,
 		MCPConfigPath:       params.MCPConfigPath,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
@@ -322,30 +324,26 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 
 	workspaceRoot := m.getWorkspaceRoot()
 	runRoot := filepath.Join(workspaceRoot, workdirBase, record.RunID)
-	workdir := filepath.Join(runRoot, "workspace")
-	skillsDir := filepath.Join(workspaceRoot, skillsRoleDir, role)
-
-	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		return fmt.Errorf("failed to create subagent workdir: %w", err)
-	}
-	if _, err := os.Stat(skillsDir); err != nil {
-		if os.IsNotExist(err) {
-			logger.Warn("Subagent skills directory does not exist; creating empty directory",
-				zap.String("run_id", result.RunID),
-				zap.String("skills_dir", skillsDir))
-			if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
-				logger.Warn("Failed to create subagent skills directory",
-					zap.String("run_id", result.RunID),
-					zap.String("skills_dir", skillsDir),
-					zap.Error(mkErr))
-			}
-		} else {
-			logger.Warn("Failed to stat subagent skills directory",
-				zap.String("run_id", result.RunID),
-				zap.String("skills_dir", skillsDir),
-				zap.Error(err))
+	defaultRepoDir := filepath.Join(runRoot, "repo")
+	repoDir := strings.TrimSpace(record.RepoDir)
+	if repoDir == "" {
+		repoDir = defaultRepoDir
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			return fmt.Errorf("failed to create subagent repo dir: %w", err)
+		}
+	} else {
+		stat, err := os.Stat(repoDir)
+		if err != nil {
+			return fmt.Errorf("subagent repo_dir does not exist: %w", err)
+		}
+		if stat == nil || !stat.IsDir() {
+			return fmt.Errorf("subagent repo_dir is not a directory: %s", repoDir)
 		}
 	}
+
+	// Role pack directory (may be missing). When it doesn't exist or doesn't
+	// contain a valid .agents pack, runtime will fall back to GoClawDir.
+	roleDir := filepath.Join(workspaceRoot, skillsRoleDir, role)
 
 	systemPrompt := BuildSubagentSystemPrompt(&SubagentSystemPromptParams{
 		RequesterSessionKey: record.RequesterSessionKey,
@@ -359,10 +357,10 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 		RunID:          record.RunID,
 		Task:           record.Task,
 		Role:           role,
-		WorkspaceDir:   workspaceRoot,
+		GoClawDir:      workspaceRoot,
+		RoleDir:        roleDir,
+		RepoDir:        repoDir,
 		MCPConfigPath:  strings.TrimSpace(record.MCPConfigPath),
-		WorkDir:        workdir,
-		SkillsDir:      skillsDir,
 		SystemPrompt:   systemPrompt,
 		TimeoutSeconds: timeoutSeconds,
 	}
@@ -418,8 +416,9 @@ func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) er
 	logger.Info("Subagent runtime started",
 		zap.String("run_id", result.RunID),
 		zap.String("role", role),
-		zap.String("workdir", workdir),
-		zap.String("skills_dir", skillsDir))
+		zap.String("goclawdir", workspaceRoot),
+		zap.String("roledir", roleDir),
+		zap.String("repodir", repoDir))
 
 	return nil
 }
@@ -853,6 +852,47 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 
 	if err := m.sessionMgr.Save(sess); err != nil {
 		logger.Error("Failed to save session", zap.Error(err))
+		return
+	}
+
+	m.exportSessionMarkdown(sess)
+}
+
+func (m *AgentManager) exportSessionMarkdown(sess *session.Session) {
+	if m == nil || sess == nil || m.cfg == nil || m.sessionMgr == nil {
+		return
+	}
+
+	memCfg := m.cfg.Memory
+	if strings.TrimSpace(memCfg.Backend) != "" && strings.TrimSpace(memCfg.Backend) != "memsearch" {
+		return
+	}
+
+	ms := memCfg.Memsearch
+	if !ms.Sessions.Enabled {
+		return
+	}
+
+	exportDir := strings.TrimSpace(ms.Sessions.ExportDir)
+	if exportDir == "" {
+		homeDir, err := config.ResolveUserHomeDir()
+		if err != nil {
+			return
+		}
+		exportDir = filepath.Join(homeDir, ".goclaw", "sessions", "export")
+	}
+	exportDir = config.ExpandUserPath(exportDir)
+	if exportDir == "" {
+		return
+	}
+
+	jsonlPath := m.sessionMgr.SessionPath(sess.Key)
+	if strings.TrimSpace(jsonlPath) == "" {
+		return
+	}
+
+	if _, err := memory.ExportSessionJSONLToMarkdown(jsonlPath, exportDir, ms.Sessions.Redact); err != nil {
+		logger.Warn("Failed to export session markdown", zap.String("session", sess.Key), zap.Error(err))
 	}
 }
 

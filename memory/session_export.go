@@ -60,6 +60,32 @@ func ExportSessionsToMarkdown(sessionDir, exportDir string, retentionDays int, r
 	return exported, nil
 }
 
+// ExportSessionJSONLToMarkdown exports a single JSONL session file to Markdown.
+// Returns the output path on success.
+func ExportSessionJSONLToMarkdown(jsonlPath, exportDir string, redact bool) (string, error) {
+	if strings.TrimSpace(jsonlPath) == "" || strings.TrimSpace(exportDir) == "" {
+		return "", fmt.Errorf("jsonlPath and exportDir are required")
+	}
+
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create export directory: %w", err)
+	}
+
+	sessionKey := strings.TrimSuffix(filepath.Base(jsonlPath), ".jsonl")
+	createdAt, messages, err := readSessionJSONL(jsonlPath)
+	if err != nil {
+		return "", err
+	}
+
+	content := buildSessionMarkdown(sessionKey, createdAt, messages, jsonlPath, redact)
+	outPath := filepath.Join(exportDir, sessionKey+".md")
+	if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
+		return "", err
+	}
+
+	return outPath, nil
+}
+
 // PruneSessionJSONL deletes JSONL session files older than retentionDays.
 func PruneSessionJSONL(sessionDir string, retentionDays int) (int, error) {
 	if retentionDays <= 0 {

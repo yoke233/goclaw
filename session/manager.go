@@ -318,3 +318,8 @@ func (m *Manager) sessionPath(key string) string {
 
 	return filepath.Join(m.baseDir, safeKey+".jsonl")
 }
+
+// SessionPath returns the full path to a session JSONL file.
+func (m *Manager) SessionPath(key string) string {
+	return m.sessionPath(key)
+}

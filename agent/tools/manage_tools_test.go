@@ -33,12 +33,12 @@ func TestSkillsCRUDAndEnableDisable(t *testing.T) {
 		t.Fatalf("skills_put: %v", err)
 	}
 	var putRes struct {
-		Success  bool   `json:"success"`
-		Dir      string `json:"dir"`
+		Success   bool   `json:"success"`
+		Dir       string `json:"dir"`
 		SkillFile string `json:"skill_file"`
-		Enabled  bool   `json:"enabled"`
-		Reloaded bool   `json:"reloaded"`
-		Error    string `json:"error,omitempty"`
+		Enabled   bool   `json:"enabled"`
+		Reloaded  bool   `json:"reloaded"`
+		Error     string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(putOut), &putRes); err != nil {
 		t.Fatalf("unmarshal put: %v", err)
@@ -47,7 +47,7 @@ func TestSkillsCRUDAndEnableDisable(t *testing.T) {
 		t.Fatalf("unexpected put result: %+v", putRes)
 	}
 
-	if want := filepath.Join(workspace, "skills", "main", "demo"); putRes.Dir != want {
+	if want := filepath.Join(workspace, "skills", "main", ".agents", "skills", "demo"); putRes.Dir != want {
 		t.Fatalf("dir=%s, want %s", putRes.Dir, want)
 	}
 	if want := filepath.Join(putRes.Dir, "SKILL.md"); putRes.SkillFile != want {
@@ -86,9 +86,9 @@ func TestSkillsCRUDAndEnableDisable(t *testing.T) {
 		t.Fatalf("skills_set_enabled: %v", err)
 	}
 	var disableRes struct {
-		Success  bool `json:"success"`
-		Enabled  bool `json:"enabled"`
-		Reloaded bool `json:"reloaded"`
+		Success  bool   `json:"success"`
+		Enabled  bool   `json:"enabled"`
+		Reloaded bool   `json:"reloaded"`
 		Error    string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(disableOut), &disableRes); err != nil {
@@ -119,9 +119,9 @@ func TestSkillsCRUDAndEnableDisable(t *testing.T) {
 		t.Fatalf("skills_delete: %v", err)
 	}
 	var delRes struct {
-		Success  bool `json:"success"`
-		Deleted  bool `json:"deleted"`
-		Reloaded bool `json:"reloaded"`
+		Success  bool   `json:"success"`
+		Deleted  bool   `json:"deleted"`
+		Reloaded bool   `json:"reloaded"`
 		Error    string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(deleteOut), &delRes); err != nil {
@@ -161,8 +161,8 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("mcp_put_server: %v", err)
 	}
 	var putRes struct {
-		Success  bool `json:"success"`
-		Reloaded bool `json:"reloaded"`
+		Success  bool   `json:"success"`
+		Reloaded bool   `json:"reloaded"`
 		Error    string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(putOut), &putRes); err != nil {
@@ -172,12 +172,12 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("unexpected put result: %+v", putRes)
 	}
 
-	cfgPath := extensions.MCPConfigPath(workspace)
-	cfg, err := extensions.LoadMCPConfig(cfgPath)
+	cfgPath := extensions.AgentsConfigPath(workspace)
+	cfg, err := extensions.LoadAgentsConfig(cfgPath)
 	if err != nil {
-		t.Fatalf("LoadMCPConfig: %v", err)
+		t.Fatalf("LoadAgentsConfig: %v", err)
 	}
-	if cfg == nil || len(cfg.Servers) != 1 {
+	if cfg == nil || len(cfg.MCPServers) != 1 {
 		t.Fatalf("expected 1 server, got %+v", cfg)
 	}
 
@@ -216,7 +216,7 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 			Name    string `json:"name"`
 			Enabled bool   `json:"enabled"`
 		} `json:"server"`
-		Reloaded bool `json:"reloaded"`
+		Reloaded bool   `json:"reloaded"`
 		Error    string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(disableOut), &disableRes); err != nil {
@@ -232,9 +232,9 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("mcp_delete_server: %v", err)
 	}
 	var delRes struct {
-		Success  bool `json:"success"`
-		Deleted  bool `json:"deleted"`
-		Reloaded bool `json:"reloaded"`
+		Success  bool   `json:"success"`
+		Deleted  bool   `json:"deleted"`
+		Reloaded bool   `json:"reloaded"`
 		Error    string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(deleteOut), &delRes); err != nil {
@@ -244,11 +244,11 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("unexpected delete result: %+v", delRes)
 	}
 
-	cfg2, err := extensions.LoadMCPConfig(cfgPath)
+	cfg2, err := extensions.LoadAgentsConfig(cfgPath)
 	if err != nil {
-		t.Fatalf("LoadMCPConfig after delete: %v", err)
+		t.Fatalf("LoadAgentsConfig after delete: %v", err)
 	}
-	if cfg2 == nil || len(cfg2.Servers) != 0 {
+	if cfg2 == nil || len(cfg2.MCPServers) != 0 {
 		t.Fatalf("expected 0 servers, got %+v", cfg2)
 	}
 
@@ -256,4 +256,3 @@ func TestMCPCrudAndEnableDisable(t *testing.T) {
 		t.Fatalf("expected invalidate to be called (>=3), got %d", invalidateCalls)
 	}
 }
-

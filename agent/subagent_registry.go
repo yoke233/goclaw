@@ -38,6 +38,7 @@ type SubagentRunRecord struct {
 	RequesterDisplayKey string              `json:"requester_display_key"`
 	Task                string              `json:"task"`
 	TaskID              string              `json:"task_id,omitempty"`
+	RepoDir             string              `json:"repo_dir,omitempty"`
 	MCPConfigPath       string              `json:"mcp_config_path,omitempty"`
 	Cleanup             string              `json:"cleanup"` // delete, keep
 	Label               string              `json:"label,omitempty"`
@@ -94,6 +95,7 @@ func (r *SubagentRegistry) RegisterRun(params *SubagentRunParams) error {
 		RequesterDisplayKey: params.RequesterDisplayKey,
 		Task:                params.Task,
 		TaskID:              params.TaskID,
+		RepoDir:             params.RepoDir,
 		MCPConfigPath:       params.MCPConfigPath,
 		Cleanup:             params.Cleanup,
 		Label:               params.Label,
@@ -133,6 +135,7 @@ type SubagentRunParams struct {
 	RequesterDisplayKey string
 	Task                string
 	TaskID              string
+	RepoDir             string
 	MCPConfigPath       string
 	Cleanup             string
 	Label               string

@@ -38,6 +38,7 @@ type SubagentRunParams struct {
 	RequesterDisplayKey string
 	Task                string
 	TaskID              string
+	RepoDir             string
 	MCPConfigPath       string
 	Cleanup             string
 	Label               string
@@ -158,6 +159,7 @@ type SubagentSpawnToolParams struct {
 	Model             string `json:"model,omitempty"`               // 模型覆盖
 	Thinking          string `json:"thinking,omitempty"`            // 思考级别
 	RunTimeoutSeconds int    `json:"run_timeout_seconds,omitempty"` // 超时时间
+	RepoDir           string `json:"repo_dir,omitempty"`            // 项目目录（repo root）
 	MCPConfigPath     string `json:"mcp_config_path,omitempty"`     // MCP 配置路径覆盖
 	Cleanup           string `json:"cleanup,omitempty"`             // 清理策略
 }
@@ -256,9 +258,13 @@ func (t *SubagentSpawnTool) Parameters() map[string]interface{} {
 				"type":        "integer",
 				"description": "Optional timeout in seconds for the sub-agent run.",
 			},
+			"repo_dir": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional repo/project directory (repodir). If omitted, goclaw will create an isolated directory for this run.",
+			},
 			"mcp_config_path": map[string]interface{}{
 				"type":        "string",
-				"description": "Optional MCP config file path for this sub-agent run. If omitted, it will inherit workspace .goclaw/mcp.json.",
+				"description": "Optional MCP config file path override for this sub-agent run. If omitted, it will use layered .agents/config.toml (base+repodir).",
 			},
 			"cleanup": map[string]interface{}{
 				"type":        "string",
@@ -370,6 +376,7 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		RequesterDisplayKey: requesterSessionKey,
 		Task:                spawnParams.Task,
 		TaskID:              spawnParams.TaskID,
+		RepoDir:             spawnParams.RepoDir,
 		MCPConfigPath:       spawnParams.MCPConfigPath,
 		Cleanup:             spawnParams.Cleanup,
 		Label:               spawnParams.Label,
@@ -480,6 +487,13 @@ func (t *SubagentSpawnTool) parseParams(params map[string]interface{}) (*Subagen
 			result.RunTimeoutSeconds = int(v)
 		case int:
 			result.RunTimeoutSeconds = v
+		}
+	}
+
+	// 解析 repo_dir
+	if val, ok := params["repo_dir"]; ok {
+		if str, ok := val.(string); ok {
+			result.RepoDir = strings.TrimSpace(str)
 		}
 	}
 
