@@ -10,6 +10,7 @@ import (
 	"time"
 
 	sdkapi "github.com/cexll/agentsdk-go/pkg/api"
+	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
 	sdkprompts "github.com/cexll/agentsdk-go/pkg/prompts"
@@ -31,13 +32,14 @@ type AgentsdkRuntimeOptions struct {
 // AgentsdkRuntime 为 sessions_spawn 提供独立执行能力。
 // 阶段 1 采用进程内执行，并保留统一接口，后续可替换为真实 agentsdk-go 执行器。
 type AgentsdkRuntime struct {
-	pool             RolePool
-	anthropicAPIKey  string
-	anthropicBaseURL string
-	modelName        string
-	temperature      float64
-	maxTokens        int
-	maxIterations    int
+	pool              RolePool
+	anthropicAPIKey   string
+	anthropicBaseURL  string
+	modelName         string
+	temperature       float64
+	maxTokens         int
+	maxIterations     int
+	permissionDecider PermissionDecider
 
 	mu   sync.RWMutex
 	runs map[string]*subagentRun
@@ -69,6 +71,15 @@ func NewAgentsdkRuntime(opts AgentsdkRuntimeOptions) *AgentsdkRuntime {
 		maxIterations:    opts.MaxIterations,
 		runs:             make(map[string]*subagentRun),
 	}
+}
+
+func (r *AgentsdkRuntime) SetPermissionDecider(decider PermissionDecider) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.permissionDecider = decider
+	r.mu.Unlock()
 }
 
 func (r *AgentsdkRuntime) Spawn(ctx context.Context, req SubagentRunRequest) (string, error) {
@@ -206,6 +217,16 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
+	r.mu.RLock()
+	decider := r.permissionDecider
+	r.mu.RUnlock()
+	var permissionHandler sdkapi.PermissionRequestHandler
+	if decider != nil {
+		permissionHandler = func(handlerCtx context.Context, req sdkapi.PermissionRequest) (coreevents.PermissionDecisionType, error) {
+			return decider(handlerCtx, run.req, req)
+		}
+	}
+
 	modelName := normalizeModelName(r.modelName)
 	if modelName == "" {
 		modelName = "claude-sonnet-4-5"
@@ -231,14 +252,15 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	}
 
 	rt, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:       repoDir,
-		ModelFactory:      modelProvider,
-		SystemPrompt:      strings.TrimSpace(run.req.SystemPrompt),
-		Skills:            skillsRegs,
-		TypedHooks:        hookRegs,
-		MaxIterations:     maxIterations,
-		Timeout:           time.Duration(timeoutSeconds) * time.Second,
-		SettingsOverrides: settingsOverrides,
+		ProjectRoot:              repoDir,
+		ModelFactory:             modelProvider,
+		SystemPrompt:             strings.TrimSpace(run.req.SystemPrompt),
+		Skills:                   skillsRegs,
+		TypedHooks:               hookRegs,
+		MaxIterations:            maxIterations,
+		Timeout:                  time.Duration(timeoutSeconds) * time.Second,
+		SettingsOverrides:        settingsOverrides,
+		PermissionRequestHandler: permissionHandler,
 	})
 	if err != nil {
 		status := RunStatusError

@@ -279,6 +279,9 @@ func (m *AgentManager) setupSubagentSupport(cfg *config.Config, contextBuilder *
 		logger.Error("Failed to register sessions_spawn tool", zap.Error(err))
 	}
 
+	// Delegate subagent sandbox "ask" approvals to the main agent (if supported).
+	m.configureSubagentApprovals()
+
 	logger.Info("Subagent support configured")
 }
 

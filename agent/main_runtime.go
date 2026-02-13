@@ -19,6 +19,12 @@ type MainRunRequest struct {
 	Workspace    string
 	Metadata     map[string]any
 	Media        []MainRunMedia
+	// ToolWhitelist restricts which tools are exposed to the model for this
+	// request. Nil means "no restriction" (default behaviour). Note that in
+	// agentsdk-go an empty slice is treated the same as nil, so to effectively
+	// disable tools callers should pass a non-empty list that doesn't match any
+	// registered tool (e.g. ["__no_tools__"]).
+	ToolWhitelist []string
 }
 
 // MainRunResult carries the main-agent execution output.

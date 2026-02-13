@@ -84,9 +84,10 @@ func (r *AgentSDKMainRuntime) Run(ctx context.Context, req MainRunRequest) (*Mai
 	runtime := entry.runtime
 
 	request := sdkapi.Request{
-		Prompt:    req.Prompt,
-		SessionID: strings.TrimSpace(req.SessionKey),
-		Metadata:  req.Metadata,
+		Prompt:        req.Prompt,
+		SessionID:     strings.TrimSpace(req.SessionKey),
+		Metadata:      req.Metadata,
+		ToolWhitelist: append([]string(nil), req.ToolWhitelist...),
 	}
 	request.ContentBlocks = buildContentBlocks(req.Prompt, req.Media)
 
