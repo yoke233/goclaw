@@ -171,11 +171,12 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		return
 	}
 
-	skillsRegs, hookRegs, warnings := loadRoleRegistrations(run.req.SkillsDir)
+	effectiveSkillsDir := resolveSubagentSkillsDir(run.req)
+	skillsRegs, hookRegs, warnings := loadRoleRegistrations(effectiveSkillsDir)
 	for _, warning := range warnings {
 		logger.Warn("Subagent skills warning",
 			zap.String("run_id", runID),
-			zap.String("skills_dir", run.req.SkillsDir),
+			zap.String("skills_dir", effectiveSkillsDir),
 			zap.String("warning", warning))
 	}
 
@@ -220,13 +221,13 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 	}
 
 	rt, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:   run.req.WorkDir,
-		ModelFactory:  modelProvider,
-		SystemPrompt:  strings.TrimSpace(run.req.SystemPrompt),
-		Skills:        skillsRegs,
-		TypedHooks:    hookRegs,
-		MaxIterations: maxIterations,
-		Timeout:       time.Duration(timeoutSeconds) * time.Second,
+		ProjectRoot:       run.req.WorkDir,
+		ModelFactory:      modelProvider,
+		SystemPrompt:      strings.TrimSpace(run.req.SystemPrompt),
+		Skills:            skillsRegs,
+		TypedHooks:        hookRegs,
+		MaxIterations:     maxIterations,
+		Timeout:           time.Duration(timeoutSeconds) * time.Second,
 		SettingsOverrides: settingsOverrides,
 	})
 	if err != nil {

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -10,19 +11,37 @@ import (
 )
 
 func buildSubagentSDKSettingsOverrides(req SubagentRunRequest) (*sdkconfig.Settings, []string) {
-	cfgPath := strings.TrimSpace(req.MCPConfigPath)
-	if cfgPath == "" {
-		workspaceDir := strings.TrimSpace(req.WorkspaceDir)
-		if workspaceDir == "" {
-			// Best-effort fallback so tests/callers that don't pass WorkspaceDir still work.
-			workspaceDir = strings.TrimSpace(req.WorkDir)
-		}
-		if workspaceDir == "" {
-			return nil, []string{"workspace dir is empty; cannot resolve mcp config path"}
-		}
-		cfgPath = extensions.MCPConfigPath(workspaceDir)
+	// Precedence:
+	// 1) Explicit override via request (MCPConfigPath)
+	// 2) Per-subagent override under WorkDir (WorkDir/.goclaw/mcp.json) if the file exists
+	// 3) Inherited workspace config (WorkspaceDir/.goclaw/mcp.json)
+	// This keeps "shared by default" while allowing a self-contained subagent home directory.
+	explicit := strings.TrimSpace(req.MCPConfigPath)
+	if explicit != "" {
+		return buildSubagentSDKSettingsOverridesFromPath(explicit)
 	}
 
+	workDir := strings.TrimSpace(req.WorkDir)
+	if workDir != "" {
+		localPath := extensions.MCPConfigPath(workDir)
+		if fileExists(localPath) {
+			return buildSubagentSDKSettingsOverridesFromPath(localPath)
+		}
+	}
+
+	workspaceDir := strings.TrimSpace(req.WorkspaceDir)
+	if workspaceDir == "" {
+		// Best-effort fallback so tests/callers that don't pass WorkspaceDir still work.
+		workspaceDir = strings.TrimSpace(req.WorkDir)
+	}
+	if workspaceDir == "" {
+		return nil, []string{"workspace dir is empty; cannot resolve mcp config path"}
+	}
+
+	return buildSubagentSDKSettingsOverridesFromPath(extensions.MCPConfigPath(workspaceDir))
+}
+
+func buildSubagentSDKSettingsOverridesFromPath(cfgPath string) (*sdkconfig.Settings, []string) {
 	cfg, err := extensions.LoadMCPConfig(cfgPath)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("load mcp config %s: %v", cfgPath, err)}
@@ -89,6 +108,14 @@ func buildSubagentSDKSettingsOverrides(req SubagentRunRequest) (*sdkconfig.Setti
 	}, warnings
 }
 
+func fileExists(path string) bool {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return stat != nil && !stat.IsDir()
+}
+
 func cloneStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
@@ -99,4 +126,3 @@ func cloneStringMap(in map[string]string) map[string]string {
 	}
 	return out
 }
-

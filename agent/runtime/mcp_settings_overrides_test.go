@@ -68,6 +68,102 @@ func TestBuildSubagentSDKSettingsOverrides_UsesWorkspaceDir(t *testing.T) {
 	}
 }
 
+func TestBuildSubagentSDKSettingsOverrides_WorkDirOverridesWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	workDir := filepath.Join(workspace, "subagent-workdir")
+
+	// Workspace has "time".
+	if err := extensions.SaveMCPConfig(extensions.MCPConfigPath(workspace), &extensions.MCPConfig{
+		Version: extensions.MCPConfigVersion,
+		Servers: map[string]extensions.MCPServer{
+			"time": {
+				Enabled: true,
+				Type:    "stdio",
+				Command: "uvx",
+				Args:    []string{"mcp-server-time"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveMCPConfig workspace: %v", err)
+	}
+
+	// WorkDir has "search". WorkDir config should win when it exists.
+	if err := extensions.SaveMCPConfig(extensions.MCPConfigPath(workDir), &extensions.MCPConfig{
+		Version: extensions.MCPConfigVersion,
+		Servers: map[string]extensions.MCPServer{
+			"search": {
+				Enabled: true,
+				Type:    "http",
+				URL:     "http://localhost:9000/mcp",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveMCPConfig workdir: %v", err)
+	}
+
+	settings, warnings := buildSubagentSDKSettingsOverrides(SubagentRunRequest{
+		WorkspaceDir: workspace,
+		WorkDir:      workDir,
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings=%v, want empty", warnings)
+	}
+	if settings == nil || settings.MCP == nil {
+		t.Fatalf("settings overrides is nil")
+	}
+	if _, ok := settings.MCP.Servers["time"]; ok {
+		t.Fatalf("workspace server unexpectedly present when workdir config exists")
+	}
+	if _, ok := settings.MCP.Servers["search"]; !ok {
+		t.Fatalf("workdir server missing")
+	}
+}
+
+func TestBuildSubagentSDKSettingsOverrides_WorkDirEmptyDisablesWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	workDir := filepath.Join(workspace, "subagent-workdir")
+
+	// Workspace has "time".
+	if err := extensions.SaveMCPConfig(extensions.MCPConfigPath(workspace), &extensions.MCPConfig{
+		Version: extensions.MCPConfigVersion,
+		Servers: map[string]extensions.MCPServer{
+			"time": {
+				Enabled: true,
+				Type:    "stdio",
+				Command: "uvx",
+				Args:    []string{"mcp-server-time"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveMCPConfig workspace: %v", err)
+	}
+
+	// WorkDir config file exists but disables everything.
+	if err := extensions.SaveMCPConfig(extensions.MCPConfigPath(workDir), &extensions.MCPConfig{
+		Version: extensions.MCPConfigVersion,
+		Servers: map[string]extensions.MCPServer{
+			"time": {
+				Enabled: false,
+				Type:    "stdio",
+				Command: "uvx",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveMCPConfig workdir: %v", err)
+	}
+
+	settings, warnings := buildSubagentSDKSettingsOverrides(SubagentRunRequest{
+		WorkspaceDir: workspace,
+		WorkDir:      workDir,
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings=%v, want empty", warnings)
+	}
+	if settings != nil {
+		t.Fatalf("settings=%v, want nil (workdir config should disable workspace MCP)", settings)
+	}
+}
+
 func TestBuildSubagentSDKSettingsOverrides_UsesExplicitConfigPath(t *testing.T) {
 	workspace := t.TempDir()
 	alt := t.TempDir()
@@ -120,4 +216,3 @@ func TestBuildSubagentSDKSettingsOverrides_UsesExplicitConfigPath(t *testing.T) 
 		t.Fatalf("explicit config server missing")
 	}
 }
-

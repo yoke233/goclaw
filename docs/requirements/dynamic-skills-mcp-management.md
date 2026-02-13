@@ -83,12 +83,23 @@
 
 可选覆盖：
 
+- 若 subagent 工作目录存在 `"<workdir>/.goclaw/mcp.json"`，则优先使用该文件（视为该 subagent 的“私有 MCP 配置”）。
 - `sessions_spawn` 支持可选参数 `mcp_config_path`。
 - 若提供 `mcp_config_path`，该 subagent run 将使用该文件作为 MCP 配置源（仅影响该次 run，不影响主 agent 或其他 subagent）。
 
 限制：
 
 - subagent 的 MCP 配置仅在该 subagent runtime 初始化时加载；运行中不做热加载（需要重新 spawn 才能生效）。
+
+### 4) Subagent Skills（继承 + 覆盖）
+
+默认行为：
+
+- subagent 使用 goclaw 的 role skills 目录（由 host 在 spawn 时传入 `SkillsDir`，通常形如：`<workspace>/<skills_role_dir>/<role>`）。
+
+可选覆盖：
+
+- 若 subagent 工作目录存在 `"<workdir>/.goclaw/skills/"`，则优先从该目录加载 skills（视为该 subagent 的“私有 skills 集”）。
 
 ## 对话工具（Tooling）
 
