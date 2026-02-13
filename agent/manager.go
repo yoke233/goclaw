@@ -106,7 +106,7 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 		workspace:         cfg.Workspace,
 	}
 	// Keep inbound consumption responsive: per-session serial, cross-session concurrent.
-	mgr.inbound = newInboundDispatcher(mgr)
+	mgr.inbound = newInboundDispatcher(mgr, inboundDispatcherOptions{})
 	return mgr
 }
 
@@ -154,6 +154,9 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 
 	logger.Info("Setting up agents from config")
 
+	// 0. Configure inbound dispatching limits (queue acks, idle TTL, global concurrency).
+	m.setupInboundDispatcher(cfg)
+
 	// 1. 先设置分身支持，确保 sessions_spawn 已注册（便于系统提示词感知真实工具集合）
 	m.setupSubagentSupport(cfg, contextBuilder)
 
@@ -198,6 +201,26 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 		zap.Int("bindings", len(m.bindings)))
 
 	return nil
+}
+
+func (m *AgentManager) setupInboundDispatcher(cfg *config.Config) {
+	if m == nil {
+		return
+	}
+	var opts inboundDispatcherOptions
+	if cfg != nil {
+		in := cfg.Agents.Defaults.Inbound
+		if in.QueueAckIntervalSeconds > 0 {
+			opts.AckInterval = time.Duration(in.QueueAckIntervalSeconds) * time.Second
+		}
+		if in.SessionIdleTTLSeconds > 0 {
+			opts.IdleTTL = time.Duration(in.SessionIdleTTLSeconds) * time.Second
+		}
+		if in.MaxConcurrent > 0 {
+			opts.MaxConcurrent = in.MaxConcurrent
+		}
+	}
+	m.inbound = newInboundDispatcher(m, opts)
 }
 
 // setupSubagentSupport 设置分身支持

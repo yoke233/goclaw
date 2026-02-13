@@ -37,7 +37,20 @@ type AgentDefaults struct {
 	MaxIterations int              `mapstructure:"max_iterations" json:"max_iterations"`
 	Temperature   float64          `mapstructure:"temperature" json:"temperature"`
 	MaxTokens     int              `mapstructure:"max_tokens" json:"max_tokens"`
+	Inbound       InboundConfig    `mapstructure:"inbound" json:"inbound"`
 	Subagents     *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
+}
+
+// InboundConfig controls how inbound chat messages are dispatched and processed.
+// Values are in seconds where applicable.
+type InboundConfig struct {
+	// MaxConcurrent limits how many inbound messages can be processed concurrently across sessions.
+	// 0 means unlimited.
+	MaxConcurrent int `mapstructure:"max_concurrent" json:"max_concurrent"`
+	// QueueAckIntervalSeconds throttles "queued" receipts (per session).
+	QueueAckIntervalSeconds int `mapstructure:"queue_ack_interval_seconds" json:"queue_ack_interval_seconds"`
+	// SessionIdleTTLSeconds controls how long a per-session worker stays alive without work.
+	SessionIdleTTLSeconds int `mapstructure:"session_idle_ttl_seconds" json:"session_idle_ttl_seconds"`
 }
 
 // SubagentsConfig 分身配置

@@ -8,6 +8,11 @@
       "max_iterations": 15,
       "temperature": 0.7,
       "max_tokens": 4096,
+      "inbound": {
+        "max_concurrent": 4,
+        "queue_ack_interval_seconds": 3,
+        "session_idle_ttl_seconds": 600
+      },
       "subagents": {
         "max_concurrent": 8,
         "role_max_concurrent": {

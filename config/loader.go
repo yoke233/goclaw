@@ -74,6 +74,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agents.defaults.max_iterations", 15)
 	v.SetDefault("agents.defaults.temperature", 0.7)
 	v.SetDefault("agents.defaults.max_tokens", 4096)
+	v.SetDefault("agents.defaults.inbound.max_concurrent", 4)
+	v.SetDefault("agents.defaults.inbound.queue_ack_interval_seconds", 3)
+	v.SetDefault("agents.defaults.inbound.session_idle_ttl_seconds", 600)
 	v.SetDefault("agents.defaults.subagents.max_concurrent", 8)
 	v.SetDefault("agents.defaults.subagents.role_max_concurrent", map[string]int{
 		"frontend": 5,

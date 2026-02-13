@@ -18,6 +18,12 @@ const (
 	defaultSessionIdleTTL   = 10 * time.Minute
 )
 
+type inboundDispatcherOptions struct {
+	AckInterval   time.Duration
+	IdleTTL       time.Duration
+	MaxConcurrent int
+}
+
 // inboundDispatcher routes inbound messages into per-session workers.
 // Each session is processed serially, while different sessions can run concurrently.
 type inboundDispatcher struct {
@@ -25,16 +31,33 @@ type inboundDispatcher struct {
 
 	ackInterval time.Duration
 	idleTTL     time.Duration
+	sem         chan struct{}
 
 	mu      sync.Mutex
 	workers map[string]*inboundSessionWorker
 }
 
-func newInboundDispatcher(mgr *AgentManager) *inboundDispatcher {
+func newInboundDispatcher(mgr *AgentManager, opts inboundDispatcherOptions) *inboundDispatcher {
+	ackInterval := defaultQueueAckInterval
+	if opts.AckInterval > 0 {
+		ackInterval = opts.AckInterval
+	}
+
+	idleTTL := defaultSessionIdleTTL
+	if opts.IdleTTL > 0 {
+		idleTTL = opts.IdleTTL
+	}
+
+	var sem chan struct{}
+	if opts.MaxConcurrent > 0 {
+		sem = make(chan struct{}, opts.MaxConcurrent)
+	}
+
 	return &inboundDispatcher{
 		manager:     mgr,
-		ackInterval: defaultQueueAckInterval,
-		idleTTL:     defaultSessionIdleTTL,
+		ackInterval: ackInterval,
+		idleTTL:     idleTTL,
+		sem:         sem,
 		workers:     make(map[string]*inboundSessionWorker),
 	}
 }
@@ -85,6 +108,7 @@ func (d *inboundDispatcher) getOrCreateWorker(ctx context.Context, sessionKey st
 		Manager:    d.manager,
 		SessionKey: sessionKey,
 		IdleTTL:    d.idleTTL,
+		Semaphore:  d.sem,
 		OnStop: func(key string) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
@@ -123,6 +147,7 @@ type inboundSessionWorkerOptions struct {
 	Manager    *AgentManager
 	SessionKey string
 	IdleTTL    time.Duration
+	Semaphore  chan struct{}
 	OnStop     func(sessionKey string)
 }
 
@@ -131,6 +156,7 @@ type inboundSessionWorker struct {
 	sessionKey string
 
 	idleTTL time.Duration
+	sem     chan struct{}
 	onStop  func(sessionKey string)
 
 	mu    sync.Mutex
@@ -152,6 +178,7 @@ func newInboundSessionWorker(opts inboundSessionWorkerOptions) *inboundSessionWo
 		manager:    opts.Manager,
 		sessionKey: strings.TrimSpace(opts.SessionKey),
 		idleTTL:    ttl,
+		sem:        opts.Semaphore,
 		onStop:     opts.OnStop,
 		wake:       make(chan struct{}, 1),
 	}
@@ -250,17 +277,44 @@ func (w *inboundSessionWorker) Run(ctx context.Context) {
 		}
 
 		w.busy.Store(true)
-		if err := w.manager.RouteInbound(ctx, msg); err != nil {
-			logger.Error("Failed to route inbound (session worker)",
-				zap.String("session_key", w.sessionKey),
-				zap.String("channel", msg.Channel),
-				zap.String("account_id", msg.AccountID),
-				zap.String("chat_id", msg.ChatID),
-				zap.Error(err))
+		acquired := w.acquire(ctx)
+		if !acquired {
+			w.busy.Store(false)
+			return
 		}
+		func() {
+			defer w.release()
+			if err := w.manager.RouteInbound(ctx, msg); err != nil {
+				logger.Error("Failed to route inbound (session worker)",
+					zap.String("session_key", w.sessionKey),
+					zap.String("channel", msg.Channel),
+					zap.String("account_id", msg.AccountID),
+					zap.String("chat_id", msg.ChatID),
+					zap.Error(err))
+			}
+		}()
 		w.busy.Store(false)
 		w.lastActive.Store(time.Now().UnixNano())
 	}
+}
+
+func (w *inboundSessionWorker) acquire(ctx context.Context) bool {
+	if w == nil || w.sem == nil {
+		return true
+	}
+	select {
+	case w.sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (w *inboundSessionWorker) release() {
+	if w == nil || w.sem == nil {
+		return
+	}
+	<-w.sem
 }
 
 func (w *inboundSessionWorker) dequeue() *bus.InboundMessage {
