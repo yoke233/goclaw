@@ -30,6 +30,7 @@ type AgentManager struct {
 	mu             sync.RWMutex
 	cfg            *config.Config
 	contextBuilder *ContextBuilder
+	inbound        *inboundDispatcher
 	// 分身支持
 	subagentRegistry  *SubagentRegistry
 	subagentAnnouncer *SubagentAnnouncer
@@ -90,7 +91,7 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 	// 创建分身宣告器
 	subagentAnnouncer := NewSubagentAnnouncer(nil) // 回调在 Start 中设置
 
-	return &AgentManager{
+	mgr := &AgentManager{
 		agents:            make(map[string]*Agent),
 		bindings:          make(map[string]*BindingEntry),
 		bus:               cfg.Bus,
@@ -104,6 +105,9 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 		dataDir:           cfg.DataDir,
 		workspace:         cfg.Workspace,
 	}
+	// Keep inbound consumption responsive: per-session serial, cross-session concurrent.
+	mgr.inbound = newInboundDispatcher(mgr)
+	return mgr
 }
 
 // handleSubagentCompletion 处理分身完成事件
@@ -982,13 +986,54 @@ func (m *AgentManager) processMessages(ctx context.Context) {
 				continue
 			}
 
-			if err := m.RouteInbound(ctx, msg); err != nil {
+			// Route inbound via dispatcher to avoid blocking the consumer goroutine.
+			if m.inbound != nil {
+				err = m.inbound.Dispatch(ctx, msg)
+			} else {
+				err = m.RouteInbound(ctx, msg)
+			}
+			if err != nil {
 				logger.Error("Failed to route message",
 					zap.String("channel", msg.Channel),
 					zap.String("account_id", msg.AccountID),
 					zap.Error(err))
 			}
 		}
+	}
+}
+
+func (m *AgentManager) sendQueueAck(sessionKey string, msg *bus.InboundMessage, ahead int) {
+	if m == nil || m.bus == nil || msg == nil {
+		return
+	}
+	channel := strings.TrimSpace(msg.Channel)
+	chatID := strings.TrimSpace(msg.ChatID)
+	if channel == "" || chatID == "" {
+		return
+	}
+
+	// Only a lightweight receipt; the real response will follow later.
+	content := "已收到，正在处理。"
+	if ahead > 0 {
+		content = fmt.Sprintf("已收到，正在处理（队列前方约 %d 条）。", ahead)
+	}
+
+	metadata := map[string]interface{}{
+		"type":        "queue_ack",
+		"session_key": strings.TrimSpace(sessionKey),
+		"ahead":       ahead,
+	}
+
+	out := &bus.OutboundMessage{
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   content,
+		ReplyTo:   strings.TrimSpace(msg.ID),
+		Metadata:  metadata,
+		Timestamp: time.Now(),
+	}
+	if err := m.bus.PublishOutbound(context.Background(), out); err != nil {
+		logger.Debug("Failed to send queue ack", zap.Error(err))
 	}
 }
 
