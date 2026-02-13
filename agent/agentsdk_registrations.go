@@ -17,7 +17,8 @@ import (
 // returns agentsdk-go registrations plus warnings.
 //
 // The directory is treated as the "skills root", meaning it should contain:
-//   <skillsDir>/<skill_name>/SKILL.md
+//
+//	<skillsDir>/<skill_name>/SKILL.md
 //
 // This mirrors the subagent runtime loader, but is kept in the main agent package
 // to avoid import cycles between agent and agent/runtime.
@@ -41,7 +42,7 @@ func loadAgentSDKRegistrations(skillsDir string) ([]sdkapi.SkillRegistration, []
 	disabled := findDisabledSkillDirs(skillsDir)
 	if len(disabled) > 0 {
 		baseFS = &disabledDirFS{
-			base:    baseFS,
+			base:     baseFS,
 			disabled: disabled,
 		}
 	}
@@ -51,6 +52,7 @@ func loadAgentSDKRegistrations(skillsDir string) ([]sdkapi.SkillRegistration, []
 		CommandsDir:  "__none__",
 		SubagentsDir: "__none__",
 		HooksDir:     "__none__",
+		Validate:     true,
 	})
 
 	warnings := make([]string, 0, len(parsed.Errors)+1)

@@ -171,7 +171,7 @@ func NewSkillsListTool(workspaceDir, skillsRoleDir string) *BaseTool {
 				if name == "" || strings.HasPrefix(name, ".") {
 					continue
 				}
-				if !isSafeIdent(name) {
+				if !isSafeSkillName(name) {
 					continue
 				}
 
@@ -254,7 +254,7 @@ func NewSkillsGetTool(workspaceDir, skillsRoleDir string) *BaseTool {
 			if name == "" {
 				return marshalSkillsError(target.Role, extensions.AgentsSkillsDir(target.RootDir), "skill_name is required"), nil
 			}
-			if !isSafeIdent(name) {
+			if !isSafeSkillName(name) {
 				return marshalSkillsError(target.Role, extensions.AgentsSkillsDir(target.RootDir), fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
@@ -351,13 +351,30 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 			if name == "" {
 				return marshalSkillsPutError(target.Role, "", "skill_name is required"), nil
 			}
-			if !isSafeIdent(name) {
+			if !isSafeSkillName(name) {
 				return marshalSkillsPutError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
 			md := asString(params["skill_md"])
 			if strings.TrimSpace(md) == "" {
 				return marshalSkillsPutError(target.Role, "", "skill_md is empty"), nil
+			}
+
+			meta, err := parseSkillFrontMatter(md)
+			if err != nil {
+				return marshalSkillsPutError(target.Role, "", err.Error()), nil
+			}
+			if meta.Name == "" {
+				return marshalSkillsPutError(target.Role, "", "frontmatter.name is required"), nil
+			}
+			if meta.Name != name {
+				return marshalSkillsPutError(target.Role, "", fmt.Sprintf("frontmatter.name %q does not match skill_name %q", meta.Name, name)), nil
+			}
+			if !isSafeSkillName(meta.Name) {
+				return marshalSkillsPutError(target.Role, "", fmt.Sprintf("invalid frontmatter.name: %s", meta.Name)), nil
+			}
+			if meta.Description == "" {
+				return marshalSkillsPutError(target.Role, "", "frontmatter.description is required"), nil
 			}
 
 			enabled := true
@@ -388,9 +405,13 @@ func NewSkillsPutTool(workspaceDir, skillsRoleDir string, invalidate RuntimeInva
 			}
 
 			if enabled {
-				_ = os.Remove(disabledFile)
+				if err := os.Remove(disabledFile); err != nil && !os.IsNotExist(err) {
+					return marshalSkillsPutError(target.Role, skillDir, err.Error()), nil
+				}
 			} else {
-				_ = os.WriteFile(disabledFile, []byte("disabled\n"), 0o644)
+				if err := os.WriteFile(disabledFile, []byte("disabled\n"), 0o644); err != nil {
+					return marshalSkillsPutError(target.Role, skillDir, err.Error()), nil
+				}
 			}
 
 			reloaded := false
@@ -460,7 +481,7 @@ func NewSkillsDeleteTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 			if name == "" {
 				return marshalSkillsDeleteError(target.Role, "", "skill_name is required"), nil
 			}
-			if !isSafeIdent(name) {
+			if !isSafeSkillName(name) {
 				return marshalSkillsDeleteError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
@@ -555,7 +576,7 @@ func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate Runt
 			if name == "" {
 				return marshalSkillsSetEnabledError(target.Role, "", "skill_name is required"), nil
 			}
-			if !isSafeIdent(name) {
+			if !isSafeSkillName(name) {
 				return marshalSkillsSetEnabledError(target.Role, "", fmt.Sprintf("invalid skill_name: %s", name)), nil
 			}
 
@@ -572,9 +593,13 @@ func NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir string, invalidate Runt
 
 			disabledFile := filepath.Join(skillDir, ".disabled")
 			if enabled {
-				_ = os.Remove(disabledFile)
+				if err := os.Remove(disabledFile); err != nil && !os.IsNotExist(err) {
+					return marshalSkillsSetEnabledError(target.Role, skillDir, err.Error()), nil
+				}
 			} else {
-				_ = os.WriteFile(disabledFile, []byte("disabled\n"), 0o644)
+				if err := os.WriteFile(disabledFile, []byte("disabled\n"), 0o644); err != nil {
+					return marshalSkillsSetEnabledError(target.Role, skillDir, err.Error()), nil
+				}
 			}
 
 			reloaded := false

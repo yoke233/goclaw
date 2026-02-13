@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	agentruntime "github.com/smallnest/goclaw/agent/runtime"
@@ -401,5 +402,285 @@ func TestMCPScopeRoleAndRepo(t *testing.T) {
 	}
 	if cfg2 == nil || len(cfg2.MCPServers) != 1 {
 		t.Fatalf("expected 1 server in repo config, got %+v", cfg2)
+	}
+}
+
+func TestSkillsGetAndOverwriteValidation(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	putTool := NewSkillsPutTool(workspace, "skills", invalidate)
+	putOut, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"skill_md":   "---\nname: demo\ndescription: test\n---\n# Demo\n",
+		"enabled":    true,
+	})
+	if err != nil {
+		t.Fatalf("skills_put: %v", err)
+	}
+	var putRes struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(putOut), &putRes); err != nil {
+		t.Fatalf("unmarshal put: %v", err)
+	}
+	if !putRes.Success || putRes.Error != "" {
+		t.Fatalf("unexpected put result: %+v", putRes)
+	}
+
+	getTool := NewSkillsGetTool(workspace, "skills")
+	getOut, err := getTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+	})
+	if err != nil {
+		t.Fatalf("skills_get: %v", err)
+	}
+	var getRes struct {
+		Success bool `json:"success"`
+		Skill   struct {
+			Name    string `json:"name"`
+			Content string `json:"content,omitempty"`
+		} `json:"skill"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(getOut), &getRes); err != nil {
+		t.Fatalf("unmarshal get: %v", err)
+	}
+	if !getRes.Success || getRes.Error != "" {
+		t.Fatalf("unexpected get result: %+v", getRes)
+	}
+	if getRes.Skill.Name != "demo" {
+		t.Fatalf("skill.name=%q, want demo", getRes.Skill.Name)
+	}
+	if !strings.Contains(getRes.Skill.Content, "# Demo") {
+		t.Fatalf("expected skills_get to include content, got: %q", getRes.Skill.Content)
+	}
+
+	getOut2, err := getTool.Execute(ctx, map[string]interface{}{
+		"role":            "main",
+		"skill_name":      "demo",
+		"include_content": false,
+	})
+	if err != nil {
+		t.Fatalf("skills_get include_content=false: %v", err)
+	}
+	var getRes2 struct {
+		Success bool `json:"success"`
+		Skill   struct {
+			Name    string `json:"name"`
+			Content string `json:"content,omitempty"`
+		} `json:"skill"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(getOut2), &getRes2); err != nil {
+		t.Fatalf("unmarshal get2: %v", err)
+	}
+	if !getRes2.Success || getRes2.Error != "" {
+		t.Fatalf("unexpected get2 result: %+v", getRes2)
+	}
+	if getRes2.Skill.Content != "" {
+		t.Fatalf("expected no content when include_content=false, got: %q", getRes2.Skill.Content)
+	}
+
+	// overwrite=false should reject replacing an existing skill.
+	putOut2, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"skill_md":   "---\nname: demo\ndescription: test\n---\n# Demo2\n",
+		"enabled":    true,
+		"overwrite":  false,
+	})
+	if err != nil {
+		t.Fatalf("skills_put overwrite=false: %v", err)
+	}
+	if err := json.Unmarshal([]byte(putOut2), &putRes); err != nil {
+		t.Fatalf("unmarshal put2: %v", err)
+	}
+	if putRes.Success || putRes.Error == "" {
+		t.Fatalf("expected overwrite=false to fail, got: %+v", putRes)
+	}
+}
+
+func TestSkillsSetEnabledWritesDisabledSentinel(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	putTool := NewSkillsPutTool(workspace, "skills", invalidate)
+	_, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"skill_md":   "---\nname: demo\ndescription: test\n---\n# Demo\n",
+		"enabled":    true,
+	})
+	if err != nil {
+		t.Fatalf("skills_put: %v", err)
+	}
+
+	skillDir := filepath.Join(workspace, "skills", "main", ".agents", "skills", "demo")
+	disabledPath := filepath.Join(skillDir, ".disabled")
+	if _, err := os.Stat(disabledPath); err == nil {
+		t.Fatalf("did not expect .disabled to exist when enabled: %s", disabledPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat .disabled: %v", err)
+	}
+
+	setTool := NewSkillsSetEnabledTool(workspace, "skills", invalidate)
+	disableOut, err := setTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"enabled":    false,
+	})
+	if err != nil {
+		t.Fatalf("skills_set_enabled disable: %v", err)
+	}
+	var disableRes struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(disableOut), &disableRes); err != nil {
+		t.Fatalf("unmarshal disable: %v", err)
+	}
+	if !disableRes.Success || disableRes.Error != "" {
+		t.Fatalf("unexpected disable result: %+v", disableRes)
+	}
+
+	if _, err := os.Stat(disabledPath); err != nil {
+		t.Fatalf("expected .disabled to exist after disable, err=%v", err)
+	}
+
+	enableOut, err := setTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"enabled":    true,
+	})
+	if err != nil {
+		t.Fatalf("skills_set_enabled enable: %v", err)
+	}
+	if err := json.Unmarshal([]byte(enableOut), &disableRes); err != nil {
+		t.Fatalf("unmarshal enable: %v", err)
+	}
+	if !disableRes.Success || disableRes.Error != "" {
+		t.Fatalf("unexpected enable result: %+v", disableRes)
+	}
+
+	if _, err := os.Stat(disabledPath); err == nil {
+		t.Fatalf("expected .disabled to be removed after enable: %s", disabledPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat .disabled after enable: %v", err)
+	}
+}
+
+func TestSkillsPutRejectsInvalidNameAndRepoOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	putTool := NewSkillsPutTool(workspace, "skills", invalidate)
+
+	// invalid skill_name (underscore not allowed by agentsdk-go skill naming rules)
+	out, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "bad_name",
+		"skill_md":   "---\nname: bad_name\ndescription: test\n---\n# Bad\n",
+	})
+	if err != nil {
+		t.Fatalf("skills_put invalid name: %v", err)
+	}
+	var res struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("unmarshal invalid name: %v", err)
+	}
+	if res.Success || res.Error == "" {
+		t.Fatalf("expected invalid skill_name to fail, got: %+v", res)
+	}
+
+	// repo_dir must be within workspace
+	outside := t.TempDir()
+	out2, err := putTool.Execute(ctx, map[string]interface{}{
+		"scope":      "repo",
+		"repo_dir":   outside,
+		"skill_name": "demo",
+		"skill_md":   "---\nname: demo\ndescription: test\n---\n# Demo\n",
+	})
+	if err != nil {
+		t.Fatalf("skills_put repo outside workspace: %v", err)
+	}
+	if err := json.Unmarshal([]byte(out2), &res); err != nil {
+		t.Fatalf("unmarshal repo outside: %v", err)
+	}
+	if res.Success || res.Error == "" {
+		t.Fatalf("expected repo outside workspace to fail, got: %+v", res)
+	}
+}
+
+func TestSkillsPutRejectsMissingOrMismatchedFrontMatter(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "default")
+
+	invalidate := RuntimeInvalidator(func(ctx context.Context, agentID string) error {
+		_ = ctx
+		_ = agentID
+		return nil
+	})
+
+	putTool := NewSkillsPutTool(workspace, "skills", invalidate)
+
+	// Missing frontmatter.
+	out, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"skill_md":   "# Demo\n(no frontmatter)\n",
+	})
+	if err != nil {
+		t.Fatalf("skills_put missing frontmatter: %v", err)
+	}
+	var res struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("unmarshal missing frontmatter: %v", err)
+	}
+	if res.Success || res.Error == "" {
+		t.Fatalf("expected missing frontmatter to fail, got: %+v", res)
+	}
+
+	// Mismatched name.
+	out2, err := putTool.Execute(ctx, map[string]interface{}{
+		"role":       "main",
+		"skill_name": "demo",
+		"skill_md":   "---\nname: other\ndescription: test\n---\n# Demo\n",
+	})
+	if err != nil {
+		t.Fatalf("skills_put mismatched name: %v", err)
+	}
+	if err := json.Unmarshal([]byte(out2), &res); err != nil {
+		t.Fatalf("unmarshal mismatched name: %v", err)
+	}
+	if res.Success || res.Error == "" {
+		t.Fatalf("expected mismatched frontmatter.name to fail, got: %+v", res)
 	}
 }
