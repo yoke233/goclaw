@@ -75,6 +75,7 @@ func (c *TelegramChannel) receiveUpdates(ctx context.Context) {
 	u.Timeout = 60
 
 	updates := c.bot.GetUpdatesChan(u)
+	defer c.bot.StopReceivingUpdates()
 
 	for {
 		select {
@@ -84,7 +85,11 @@ func (c *TelegramChannel) receiveUpdates(ctx context.Context) {
 		case <-c.WaitForStop():
 			logger.Info("Telegram channel stopped")
 			return
-		case update := <-updates:
+		case update, ok := <-updates:
+			if !ok {
+				logger.Info("Telegram updates channel closed")
+				return
+			}
 			if err := c.handleUpdate(ctx, &update); err != nil {
 				logger.Error("Failed to handle update",
 					zap.Error(err),

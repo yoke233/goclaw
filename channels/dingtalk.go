@@ -3,7 +3,9 @@ package channels
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
@@ -17,14 +19,27 @@ import (
 // DingTalkChannel DingTalk 通道实现
 type DingTalkChannel struct {
 	*BaseChannelImpl
-	config         config.DingTalkChannelConfig
-	clientID       string
-	clientSecret   string
-	streamClient   *client.StreamClient
-	ctx            context.Context
-	cancel         context.CancelFunc
+	config       config.DingTalkChannelConfig
+	clientID     string
+	clientSecret string
+	streamClient *client.StreamClient
+	ctx          context.Context
+	cancel       context.CancelFunc
 	// Map to store session webhooks for each chat
-	sessionWebhooks sync.Map // chatID -> sessionWebhook
+	sessionWebhooks      sync.Map // chatID -> sessionWebhookEntry
+	sessionWebhookSize   int64
+	sessionWebhookTrimMu sync.Mutex
+}
+
+const (
+	dingtalkSessionWebhookTTL             = 24 * time.Hour
+	dingtalkSessionWebhookMaxEntries      = 5000
+	dingtalkSessionWebhookCleanupInterval = 10 * time.Minute
+)
+
+type sessionWebhookEntry struct {
+	Webhook   string
+	UpdatedAt time.Time
 }
 
 // NewDingTalkChannel 创建 DingTalk 通道实例
@@ -74,6 +89,8 @@ func (c *DingTalkChannel) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start stream client: %w", err)
 	}
 
+	go c.runSessionWebhookJanitor(c.ctx)
+
 	logger.Info("DingTalk channel started (Stream Mode)")
 	return nil
 }
@@ -90,6 +107,8 @@ func (c *DingTalkChannel) Stop() error {
 		c.streamClient.Close()
 	}
 
+	c.clearSessionWebhookCache()
+
 	if err := c.BaseChannelImpl.Stop(); err != nil {
 		return err
 	}
@@ -104,15 +123,9 @@ func (c *DingTalkChannel) Send(msg *bus.OutboundMessage) error {
 		return fmt.Errorf("dingtalk channel not running")
 	}
 
-	// Get session webhook from storage
-	sessionWebhookRaw, ok := c.sessionWebhooks.Load(msg.ChatID)
+	sessionWebhook, ok := c.getSessionWebhook(msg.ChatID, time.Now())
 	if !ok {
 		return fmt.Errorf("no session_webhook found for chat %s, cannot send message", msg.ChatID)
-	}
-
-	sessionWebhook, ok := sessionWebhookRaw.(string)
-	if !ok {
-		return fmt.Errorf("invalid session_webhook type for chat %s", msg.ChatID)
 	}
 
 	logger.Info("DingTalk message to send",
@@ -184,8 +197,9 @@ func (c *DingTalkChannel) onChatBotMessageReceived(ctx context.Context, data *ch
 		return nil, nil
 	}
 
+	now := time.Now()
 	// Store session webhook for this chat so we can reply later
-	c.sessionWebhooks.Store(chatID, data.SessionWebhook)
+	c.setSessionWebhook(chatID, data.SessionWebhook, now)
 
 	logger.Info("DingTalk message received",
 		zap.String("sender_nick", senderNick),
@@ -200,12 +214,12 @@ func (c *DingTalkChannel) onChatBotMessageReceived(ctx context.Context, data *ch
 		SenderID:  senderID,
 		ChatID:    chatID,
 		Channel:   c.Name(),
-		Timestamp: time.Now(),
+		Timestamp: now,
 		Metadata: map[string]interface{}{
 			"sender_name":       senderNick,
 			"conversation_id":   data.ConversationId,
 			"conversation_type": data.ConversationType,
-			"platform":         "dingtalk",
+			"platform":          "dingtalk",
 			"session_webhook":   data.SessionWebhook,
 		},
 	}
@@ -215,6 +229,155 @@ func (c *DingTalkChannel) onChatBotMessageReceived(ctx context.Context, data *ch
 
 	// Return nil to indicate we've handled message asynchronously
 	return nil, nil
+}
+
+func (c *DingTalkChannel) runSessionWebhookJanitor(ctx context.Context) {
+	ticker := time.NewTicker(dingtalkSessionWebhookCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.trimSessionWebhookCache(time.Now())
+		}
+	}
+}
+
+func (c *DingTalkChannel) clearSessionWebhookCache() {
+	c.sessionWebhooks.Range(func(key, _ interface{}) bool {
+		c.sessionWebhooks.Delete(key)
+		return true
+	})
+	atomic.StoreInt64(&c.sessionWebhookSize, 0)
+}
+
+func (c *DingTalkChannel) setSessionWebhook(chatID, sessionWebhook string, now time.Time) {
+	if chatID == "" || sessionWebhook == "" {
+		return
+	}
+	if _, loaded := c.sessionWebhooks.Load(chatID); !loaded {
+		atomic.AddInt64(&c.sessionWebhookSize, 1)
+	}
+	c.sessionWebhooks.Store(chatID, sessionWebhookEntry{
+		Webhook:   sessionWebhook,
+		UpdatedAt: now,
+	})
+
+	if atomic.LoadInt64(&c.sessionWebhookSize) > dingtalkSessionWebhookMaxEntries {
+		c.trimSessionWebhookCache(now)
+	}
+}
+
+func (c *DingTalkChannel) getSessionWebhook(chatID string, now time.Time) (string, bool) {
+	raw, ok := c.sessionWebhooks.Load(chatID)
+	if !ok {
+		return "", false
+	}
+
+	switch entry := raw.(type) {
+	case sessionWebhookEntry:
+		if entry.Webhook == "" || now.Sub(entry.UpdatedAt) > dingtalkSessionWebhookTTL {
+			c.deleteSessionWebhook(chatID)
+			return "", false
+		}
+		return entry.Webhook, true
+	case string:
+		if entry == "" {
+			c.deleteSessionWebhook(chatID)
+			return "", false
+		}
+		c.sessionWebhooks.Store(chatID, sessionWebhookEntry{
+			Webhook:   entry,
+			UpdatedAt: now,
+		})
+		return entry, true
+	default:
+		c.deleteSessionWebhook(chatID)
+		return "", false
+	}
+}
+
+func (c *DingTalkChannel) deleteSessionWebhook(chatID string) {
+	if _, loaded := c.sessionWebhooks.LoadAndDelete(chatID); loaded {
+		size := atomic.AddInt64(&c.sessionWebhookSize, -1)
+		if size < 0 {
+			atomic.StoreInt64(&c.sessionWebhookSize, 0)
+		}
+	}
+}
+
+func (c *DingTalkChannel) trimSessionWebhookCache(now time.Time) {
+	c.sessionWebhookTrimMu.Lock()
+	defer c.sessionWebhookTrimMu.Unlock()
+
+	type webhookItem struct {
+		chatID    string
+		updatedAt time.Time
+	}
+
+	active := make([]webhookItem, 0)
+
+	c.sessionWebhooks.Range(func(key, value interface{}) bool {
+		chatID, ok := key.(string)
+		if !ok {
+			c.sessionWebhooks.Delete(key)
+			return true
+		}
+
+		var entry sessionWebhookEntry
+		switch data := value.(type) {
+		case sessionWebhookEntry:
+			entry = data
+		case string:
+			if data == "" {
+				c.deleteSessionWebhook(chatID)
+				return true
+			}
+			entry = sessionWebhookEntry{
+				Webhook:   data,
+				UpdatedAt: now,
+			}
+			c.sessionWebhooks.Store(chatID, entry)
+		default:
+			c.deleteSessionWebhook(chatID)
+			return true
+		}
+
+		if entry.Webhook == "" || now.Sub(entry.UpdatedAt) > dingtalkSessionWebhookTTL {
+			c.deleteSessionWebhook(chatID)
+			return true
+		}
+
+		active = append(active, webhookItem{
+			chatID:    chatID,
+			updatedAt: entry.UpdatedAt,
+		})
+		return true
+	})
+
+	if len(active) > dingtalkSessionWebhookMaxEntries {
+		sort.Slice(active, func(i, j int) bool {
+			return active[i].updatedAt.Before(active[j].updatedAt)
+		})
+
+		overflow := len(active) - dingtalkSessionWebhookMaxEntries
+		for i := 0; i < overflow; i++ {
+			c.deleteSessionWebhook(active[i].chatID)
+		}
+
+		logger.Warn("Trimmed DingTalk session webhook cache",
+			zap.Int("removed_entries", overflow),
+			zap.Int("max_entries", dingtalkSessionWebhookMaxEntries))
+	}
+
+	var actualSize int64
+	c.sessionWebhooks.Range(func(_, _ interface{}) bool {
+		actualSize++
+		return true
+	})
+	atomic.StoreInt64(&c.sessionWebhookSize, actualSize)
 }
 
 // SendDirectReply 使用 session webhook 发送直接回复

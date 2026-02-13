@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -433,13 +432,4 @@ func GetActiveWatchers() int {
 	globalWatchManager.Mutex.RLock()
 	defer globalWatchManager.Mutex.RUnlock()
 	return len(globalWatchManager.Watchers)
-}
-
-// Initialize skills watching on application startup
-func init() {
-	// Gracefully shutdown watchers on application exit
-	go func() {
-		<-context.Background().Done()
-		StopAllWatchers()
-	}()
 }

@@ -62,14 +62,18 @@ func (b *MessageBus) PublishInbound(ctx context.Context, msg *InboundMessage) er
 // ConsumeInbound 消费入站消息
 func (b *MessageBus) ConsumeInbound(ctx context.Context) (*InboundMessage, error) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	if b.closed {
+		b.mu.RUnlock()
 		return nil, ErrBusClosed
 	}
+	inbound := b.inbound
+	b.mu.RUnlock()
 
 	select {
-	case msg := <-b.inbound:
+	case msg, ok := <-inbound:
+		if !ok {
+			return nil, ErrBusClosed
+		}
 		return msg, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

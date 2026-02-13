@@ -78,6 +78,17 @@ func (c *BaseChannelImpl) Start(ctx context.Context) error {
 		return nil
 	}
 
+	if c.running {
+		return nil
+	}
+
+	// 支持 Stop 后再次 Start：若 stopChan 已关闭，重建一个新的停止信号通道。
+	select {
+	case <-c.stopChan:
+		c.stopChan = make(chan struct{})
+	default:
+	}
+
 	c.running = true
 	return nil
 }
@@ -88,7 +99,11 @@ func (c *BaseChannelImpl) Stop() error {
 		return nil
 	}
 
-	close(c.stopChan)
+	select {
+	case <-c.stopChan:
+	default:
+		close(c.stopChan)
+	}
 	c.running = false
 	return nil
 }

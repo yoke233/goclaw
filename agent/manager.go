@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1007,6 +1008,10 @@ func (m *AgentManager) processMessages(ctx context.Context) {
 			if err != nil {
 				if err == context.DeadlineExceeded || err == context.Canceled {
 					continue
+				}
+				if errors.Is(err, bus.ErrBusClosed) {
+					logger.Info("Message bus closed, stopping inbound processor")
+					return
 				}
 				logger.Error("Failed to consume inbound", zap.Error(err))
 				continue
