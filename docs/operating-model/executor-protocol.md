@@ -99,6 +99,8 @@
 最小字段（MVP）：
 
 - `issue_ref`：IssueRef（必须）
+  - 必须使用 canonical IssueRef 字符串（见 `docs/operating-model/outbox-backends.md`）
+  - 不允许传 GitHub/GitLab 的内部 `id/node_id` 作为 `issue_ref`
 - `run_id`：本次 WorkRun 的唯一 ID（必须）
 - `role`：本次执行的角色（必须）
 - `repo_dir`：执行目录（必须）
@@ -112,6 +114,7 @@
 最小字段（MVP）：
 
 - `issue_ref`（必须）
+  - 必须回显 WorkOrder 中的 canonical IssueRef
 - `run_id`（必须，回显 WorkOrder 的 run_id）
 - `status`：`ok|fail|blocked`（必须）
 - `changes`：PR URL 或 commit URL，至少一个（必须）

@@ -88,12 +88,12 @@ auto_unblock_when_dependency_closed = true
 
 ## 4) Issue 的“创建/领取/写回”怎么做（本地）
 
-本地 outbox 的 Thread/Event 语义与 GitHub 一致，只是落在 SQLite：
+本地 outbox 的 Issue/Event 语义与 GitHub 一致，只是落在 SQLite：
 
-1. 创建 thread（等价于创建 issue）
+1. 创建 issue
 2. 设置 labels（`to:*`、可选 `state:*`）
 3. claim：设置 `assignee`（事实源）
-4. 追加事件：按 comment 模板追加 `outbox_events.body`
+4. 追加事件：按 comment 模板追加 `events.body`
 5. close：将 `is_closed=1`
 
 你可以先手工操作（例如用 sqlite CLI 或简单脚本），等 Phase 2 再做自动化。
@@ -133,4 +133,3 @@ Phase 1 最小可行做法：
 - 只接受当前 `active_run_id` 的结果写回 Outbox
 
 见：`docs/operating-model/executor-protocol.md`
-

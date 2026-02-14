@@ -13,11 +13,30 @@
 - Issue：一个可追加事件的协作条目（唯一主键；语义等价于“issue 线程”）
 - Event：Issue 中的一条追加记录（append-only）
 
+### 1.1 IssueRef（规范定义，V1 固定）
+
+`IssueRef` 不是“随便一个 id”，而是跨 backend 的统一引用字符串。V1 约定如下：
+
+- GitHub：`<owner>/<repo>#<number>`
+  - `number` 使用 GitHub Issue 的编号（网页显示的 `#123`）
+  - 不使用 REST `id`、GraphQL `node_id`
+- GitLab：`<group>/<project>#<iid>`
+  - 使用 Issue 的 `iid`（项目内编号）
+  - 不使用全局 `id`
+- SQLite：`local#<issue_id>`
+  - `issue_id` 对应 `issues.issue_id`
+
+唯一性与范围：
+
+- GitHub/GitLab：`owner/repo(or project)+编号` 组合保证全局可定位
+- SQLite：`local#<issue_id>` 在单个 outbox DB（`outbox.path`）内唯一
+- 迁移 backend 时，`IssueRef` 可能变化，但语义保持“同一个协作 Issue”
+
 映射示例：
 
 - GitHub：Issue=Issue，Event=Comment
 - GitLab：Issue=Issue，Event=Note
-- SQLite：Issue=outbox_threads 表一行，Event=outbox_events 表一行
+- SQLite：Issue=issues 表一行，Event=events 表一行
 
 ## 2) 最小能力集合（接口语义）
 
@@ -50,8 +69,8 @@
 
 推荐格式（ASCII、可读）：
 
-- `IssueRef`：`local#<thread_id>`
-- `EventRef`：`local#<thread_id>/e<event_id>`
+- `IssueRef`：`local#<issue_id>`
+- `EventRef`：`local#<issue_id>/e<event_id>`
 
 示例：
 
@@ -62,9 +81,9 @@
 
 控制平面实现可以用任意等价 schema；下面是 V1 推荐 schema（便于查询与索引）。
 
-表：`outbox_threads`
+表：`issues`
 
-- `thread_id INTEGER PRIMARY KEY AUTOINCREMENT`
+- `issue_id INTEGER PRIMARY KEY AUTOINCREMENT`
 - `title TEXT NOT NULL`
 - `body TEXT NOT NULL`  (Issue 主帖 Markdown)
 - `assignee TEXT NULL`  (claim 真源：谁负责，语义等价于 GitHub assignee)
@@ -73,21 +92,21 @@
 - `updated_at TEXT NOT NULL`  (ISO8601)
 - `closed_at TEXT NULL`       (ISO8601)
 
-表：`outbox_thread_labels`
+表：`issue_labels`
 
-- `thread_id INTEGER NOT NULL`
+- `issue_id INTEGER NOT NULL`
 - `label TEXT NOT NULL`
-- `PRIMARY KEY(thread_id, label)`
-- `FOREIGN KEY(thread_id) REFERENCES outbox_threads(thread_id) ON DELETE CASCADE`
+- `PRIMARY KEY(issue_id, label)`
+- `FOREIGN KEY(issue_id) REFERENCES issues(issue_id) ON DELETE CASCADE`
 
-表：`outbox_events`
+表：`events`
 
 - `event_id INTEGER PRIMARY KEY AUTOINCREMENT`
-- `thread_id INTEGER NOT NULL`
+- `issue_id INTEGER NOT NULL`
 - `actor TEXT NOT NULL`        (事件作者；本地可用 `whoami` 或自定义 ID)
 - `body TEXT NOT NULL`         (Comment 模板渲染后的 Markdown)
 - `created_at TEXT NOT NULL`   (ISO8601)
-- `FOREIGN KEY(thread_id) REFERENCES outbox_threads(thread_id) ON DELETE CASCADE`
+- `FOREIGN KEY(issue_id) REFERENCES issues(issue_id) ON DELETE CASCADE`
 
 可选表：`outbox_kv`（用于 cursor / active_run_id 等少量控制平面状态）
 
@@ -97,10 +116,10 @@
 
 推荐索引（可选）：
 
-- `CREATE INDEX idx_threads_closed ON outbox_threads(is_closed);`
-- `CREATE INDEX idx_threads_assignee ON outbox_threads(assignee);`
-- `CREATE INDEX idx_labels_label ON outbox_thread_labels(label);`
-- `CREATE INDEX idx_events_thread ON outbox_events(thread_id, event_id);`
+- `CREATE INDEX idx_issues_closed ON issues(is_closed);`
+- `CREATE INDEX idx_issues_assignee ON issues(assignee);`
+- `CREATE INDEX idx_issue_labels_label ON issue_labels(label);`
+- `CREATE INDEX idx_events_issue ON events(issue_id, event_id);`
 
 ### 3.3 identity（actor）说明
 
@@ -123,10 +142,10 @@
 当需要多人协作或需要外部审计时，建议迁移到 Issues 系统：
 
 - IssueRef 会变化（`local#12` -> `org/repo#123`）
-- 但协议不变：Thread/Event/labels/assignee/close 语义保持一致
+- 但协议不变：Issue/Event/labels/assignee/close 语义保持一致
 
 迁移最低要求：
 
-- 将 `outbox_threads.title/body` 转成 Issue title/body
-- 将 `outbox_events.body` 按顺序追加为 Comment/Note
+- 将 `issues.title/body` 转成 Issue title/body
+- 将 `events.body` 按顺序追加为 Comment/Note
 - 将 labels/assignee/close 状态同步过去

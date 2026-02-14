@@ -59,7 +59,7 @@ approvers = ["agent-architect", "agent-integrator", "yoke233"]
 
 - 盖章人身份必须以 Outbox backend 提供的“作者身份字段”为准（而不是正文文本）
   - GitHub/GitLab：comment/note author login（平台账号）
-  - SQLite：`outbox_events.actor`（本地字符串 ID）
+  - SQLite：`events.actor`（本地字符串 ID）
 - 不允许仅凭正文出现 “/accept” 就判定通过（避免冒名或误触发）
 - 本地/离线模式说明：SQLite backend 里 `actor` 通常只具备“约定俗成”的可信度，不具备平台级强认证；需要强审计时应迁移到 GitHub/GitLab 或服务端 DB（见 `docs/operating-model/outbox-backends.md`）
 
