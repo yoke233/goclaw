@@ -1,6 +1,7 @@
 Role: <architect|backend|frontend|qa|integrator|recorder>
 Repo: <logical repo key from workflow.toml>
 IssueRef: <owner/repo#number | local#id>
+RunId: <YYYY-MM-DD-role-seq | none>
 SpecRef: <path-or-url | none>
 ContractsRef: <contracts@sha-or-tag|none>
 Action: <claim|update|proposal|accept|reject|blocked|unblock|done>
@@ -8,7 +9,7 @@ Status: <todo|doing|blocked|review|done>
 ReadUpTo: <last-comment-id|none>
 Trigger: <stable-trigger-id>
 
-# Recommended: for lead-normalized worker results, use `workrun:<run_id>` (see docs/operating-model/executor-protocol.md)
+# Note: `RunId` in template maps to protocol field `run_id` (see docs/standards/naming-and-ids.md)
 
 Summary:
 - <what changed or what was decided>

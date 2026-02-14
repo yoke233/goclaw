@@ -26,6 +26,8 @@
 
 - 需求层/质量层的原则与产物：本目录
 - 交付层的协议与模板（Outbox、labels、claim、Lead/Worker、mailbox）：`docs/workflow/`
+- 跨文档稳定规范（命名、审批、标签、文档生命周期）：`docs/standards/`
+- 功能级定稿文档（requirement/prd/tech-spec）：`docs/features/`
 
 推荐阅读顺序：
 

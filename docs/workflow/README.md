@@ -19,6 +19,8 @@ V1/V1.1 本项目的关键选择（先记住这几条，其它都是细节）：
 
 - `docs/operating-model/README.md`：三层操作模型（Product Truth / Delivery Control / Quality Gate，含分阶段计划）
 - `docs/operating-model/START-HERE.md`：Phase 1 本地启动清单（git + sqlite，最小可开工）
+- `docs/standards/README.md`：跨文档稳定规范入口（命名、审批、标签、文档生命周期）
+- `docs/features/README.md`：feature 级定稿文档入口（requirement/prd/tech-spec）
 - `docs/workflow/roles-and-flow.md`：角色边界与推荐流程（主 agent/架构师/实现/测试/集成）
 - `docs/workflow/lead-worker.md`：Lead/Worker 运行模型（每个角色一个常驻 Lead，多 Worker 并发）
 - `docs/workflow/v1.1.md`：V1.1 补充约定（多环境布局、Claim/Assignee、PR（forge）闭环、Outbox 抽象）
