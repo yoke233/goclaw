@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,13 +19,16 @@ type SessionNode struct {
 
 // BranchInfo contains metadata about a branch
 type BranchInfo struct {
-	Name        string    `json:"name"`        // Human-readable branch name
-	Description string    `json:"description"` // Branch description
-	IsMain      bool      `json:"is_main"`     // Whether this is the main branch
-	IsMerged    bool      `json:"is_merged"`   // Whether this branch was merged back
-	MergedFrom  []string  `json:"merged_from"` // List of branch IDs that were merged
-	CreatedAt   time.Time `json:"created_at"`
-	CreatedBy   string    `json:"created_by"` // What created this branch (user, system, auto)
+	Name        string   `json:"name"`        // Human-readable branch name
+	Description string   `json:"description"` // Branch description
+	IsMain      bool     `json:"is_main"`     // Whether this is the main branch
+	IsMerged    bool     `json:"is_merged"`   // Whether this branch was merged back
+	MergedFrom  []string `json:"merged_from"` // List of branch IDs that were merged
+	// BaseMessageCount captures how many messages were copied from the parent when the branch was created.
+	// When set, MergeBranch should only apply the delta (messages beyond this count) back to the parent.
+	BaseMessageCount int       `json:"base_message_count"`
+	CreatedAt        time.Time `json:"created_at"`
+	CreatedBy        string    `json:"created_by"` // What created this branch (user, system, auto)
 }
 
 // SessionTree manages a tree structure of sessions with branching
@@ -89,6 +93,7 @@ func (t *SessionTree) CreateBranch(parentID string, branchSession *Session, bran
 	}
 
 	// Create branch session (copy of parent with new messages)
+	baseMessageCount := 0
 	if branchSession == nil {
 		branchSession = &Session{
 			Key:       fmt.Sprintf("%s-branch-%d", parentID, len(parent.ChildIDs)+1),
@@ -98,20 +103,28 @@ func (t *SessionTree) CreateBranch(parentID string, branchSession *Session, bran
 			Metadata:  make(map[string]interface{}),
 		}
 		copy(branchSession.Messages, parent.Session.Messages)
+		baseMessageCount = len(parent.Session.Messages)
 	}
 
 	// Create branch node
-	branchID := branchSession.Key
+	branchID := strings.TrimSpace(branchSession.Key)
+	if branchID == "" {
+		return "", fmt.Errorf("branch session key cannot be empty")
+	}
+	if _, exists := t.nodes[branchID]; exists {
+		return "", fmt.Errorf("branch %s already exists", branchID)
+	}
 	branchNode := &SessionNode{
 		ID:       branchID,
 		Session:  branchSession,
 		ParentID: parentID,
 		ChildIDs: []string{},
 		BranchInfo: &BranchInfo{
-			Name:      branchName,
-			IsMain:    false,
-			CreatedAt: time.Now(),
-			CreatedBy: createdBy,
+			Name:             branchName,
+			IsMain:           false,
+			BaseMessageCount: baseMessageCount,
+			CreatedAt:        time.Now(),
+			CreatedBy:        createdBy,
 		},
 		CreatedAt: time.Now(),
 	}
@@ -212,15 +225,28 @@ func (t *SessionTree) MergeBranch(branchID string) error {
 	if branch.BranchInfo == nil || branch.BranchInfo.IsMain {
 		return fmt.Errorf("cannot merge main branch")
 	}
+	// Idempotent merge: if already merged once, do nothing.
+	if branch.BranchInfo.IsMerged {
+		return nil
+	}
 
 	parent, ok := t.nodes[branch.ParentID]
 	if !ok {
 		return fmt.Errorf("parent node %s not found", branch.ParentID)
 	}
 
-	// Append branch messages to parent
+	// Append only branch delta back to parent.
+	base := 0
+	if branch.BranchInfo != nil && branch.BranchInfo.BaseMessageCount > 0 {
+		base = branch.BranchInfo.BaseMessageCount
+	}
+	if base < 0 || base > len(branch.Session.Messages) {
+		base = 0
+	}
+	delta := branch.Session.Messages[base:]
+
 	parent.Session.mu.Lock()
-	parent.Session.Messages = append(parent.Session.Messages, branch.Session.Messages...)
+	parent.Session.Messages = append(parent.Session.Messages, delta...)
 	parent.Session.UpdatedAt = time.Now()
 	parent.Session.mu.Unlock()
 
@@ -229,7 +255,16 @@ func (t *SessionTree) MergeBranch(branchID string) error {
 	if parent.BranchInfo == nil {
 		parent.BranchInfo = &BranchInfo{}
 	}
-	parent.BranchInfo.MergedFrom = append(parent.BranchInfo.MergedFrom, branchID)
+	alreadyRecorded := false
+	for _, mergedFrom := range parent.BranchInfo.MergedFrom {
+		if mergedFrom == branchID {
+			alreadyRecorded = true
+			break
+		}
+	}
+	if !alreadyRecorded {
+		parent.BranchInfo.MergedFrom = append(parent.BranchInfo.MergedFrom, branchID)
+	}
 
 	return nil
 }

@@ -25,7 +25,7 @@ var onboardCmd = &cobra.Command{
 	Long: `Guided setup wizard for goclaw.
 
 This command helps you:
-1. Initialize the config file and built-in skills
+1. Initialize the config file
 2. Configure your API key and model
 3. Set up your workspace
 
@@ -49,7 +49,7 @@ func runOnboard(cmd *cobra.Command, args []string) {
 	fmt.Println("╚════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// 1. Initialize config file and built-in skills
+	// 1. Initialize config file
 	fmt.Println("Step 1: Initializing goclaw environment...")
 	goclawDir := internal.GetGoclawDir()
 	fmt.Printf("  Config directory: %s\n", goclawDir)
@@ -66,12 +66,6 @@ func runOnboard(cmd *cobra.Command, args []string) {
 		fmt.Println("  ✓ Config file already exists")
 	}
 
-	// Ensure built-in skills exist
-	if err := internal.EnsureBuiltinSkills(); err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: Failed to ensure built-in skills: %v\n", err)
-	} else {
-		fmt.Println("  ✓ Built-in skills ready")
-	}
 	fmt.Println()
 
 	// 2. Load existing config

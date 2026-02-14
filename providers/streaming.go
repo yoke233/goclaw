@@ -60,8 +60,9 @@ func (b *StreamBuffer) Add(chunk StreamChunk) error {
 		return fmt.Errorf("stream is already complete")
 	}
 
-	// Check buffer size
-	if b.content.Len()+b.thinking.Len()+b.final.Len() > b.maxSize {
+	// Check buffer size including the incoming chunk.
+	nextSize := b.content.Len() + b.thinking.Len() + b.final.Len() + len(chunk.Content)
+	if nextSize > b.maxSize {
 		return fmt.Errorf("buffer size exceeded")
 	}
 
@@ -134,11 +135,31 @@ type ThinkingParser struct {
 	mu         sync.Mutex
 	inThinking bool
 	inFinal    bool
+	carry      string
 }
 
 // NewThinkingParser creates a new thinking parser
 func NewThinkingParser() *ThinkingParser {
 	return &ThinkingParser{}
+}
+
+var thinkingParserTags = []string{
+	"<thinking>",
+	"</thinking>",
+	"<final>",
+	"</final>",
+}
+
+func isThinkingParserTagPrefix(s string) bool {
+	if s == "" || !strings.HasPrefix(s, "<") {
+		return false
+	}
+	for _, tag := range thinkingParserTags {
+		if strings.HasPrefix(tag, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Parse parses a chunk and separates thinking, final, and regular content
@@ -147,6 +168,11 @@ func (p *ThinkingParser) Parse(content string) []StreamChunk {
 	defer p.mu.Unlock()
 
 	chunks := make([]StreamChunk, 0)
+
+	if p.carry != "" {
+		content = p.carry + content
+		p.carry = ""
+	}
 
 	for content != "" {
 		// Check for thinking tag start
@@ -166,15 +192,22 @@ func (p *ThinkingParser) Parse(content string) []StreamChunk {
 		// Check for final tag start
 		if !p.inFinal && !p.inThinking && strings.HasPrefix(content, "<final>") {
 			p.inFinal = true
-			content = content[8:]
+			content = content[7:]
 			continue
 		}
 
 		// Check for final tag end
 		if p.inFinal && strings.HasPrefix(content, "</final>") {
 			p.inFinal = false
-			content = content[9:]
+			content = content[8:]
 			continue
+		}
+
+		// If this chunk starts with a partial tag (split across network chunks),
+		// buffer it and wait for the next Parse call.
+		if strings.HasPrefix(content, "<") && isThinkingParserTagPrefix(content) {
+			p.carry = content
+			break
 		}
 
 		// Find the next tag or end of content
@@ -196,6 +229,16 @@ func (p *ThinkingParser) Parse(content string) []StreamChunk {
 		if nextTag == -1 {
 			chunkContent = content
 			content = ""
+
+			// Avoid emitting a trailing partial tag (e.g. "</fi") so the next
+			// chunk can complete it.
+			if idx := strings.LastIndex(chunkContent, "<"); idx != -1 {
+				tail := chunkContent[idx:]
+				if isThinkingParserTagPrefix(tail) {
+					p.carry = tail
+					chunkContent = chunkContent[:idx]
+				}
+			}
 		} else {
 			chunkContent = content[:nextTag]
 			content = content[nextTag:]
@@ -243,6 +286,7 @@ func (p *ThinkingParser) Reset() {
 	defer p.mu.Unlock()
 	p.inThinking = false
 	p.inFinal = false
+	p.carry = ""
 }
 
 // StreamingAdapter wraps a Provider to add streaming capabilities

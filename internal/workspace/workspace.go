@@ -33,6 +33,34 @@ type Manager struct {
 	workspaceDir string
 }
 
+func safeJoinUnderDir(baseDir, filename string) (string, bool) {
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		return "", false
+	}
+	// Reject absolute/drive paths and ADS-like inputs.
+	if filepath.IsAbs(name) || strings.Contains(name, ":") {
+		return "", false
+	}
+
+	base := filepath.Clean(baseDir)
+	cleaned := filepath.Clean(name)
+	if cleaned == "." {
+		return "", false
+	}
+
+	target := filepath.Join(base, cleaned)
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.Clean(rel)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return target, true
+}
+
 // NewManager 创建 workspace 管理器
 func NewManager(workspaceDir string) *Manager {
 	return &Manager{
@@ -136,7 +164,11 @@ func (m *Manager) createHeartbeatState(path string) error {
 
 // ReadBootstrapFile 读取 bootstrap 文件内容
 func (m *Manager) ReadBootstrapFile(filename string) (string, error) {
-	path := filepath.Join(m.workspaceDir, filename)
+	path, ok := safeJoinUnderDir(m.workspaceDir, filename)
+	if !ok {
+		// Treat traversal/invalid paths as a blocked read, not an OS error.
+		return "", nil
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -193,7 +225,12 @@ func (m *Manager) AppendTodayLog(content string) error {
 
 // ReadMemoryFile 读取 memory 目录下的文件
 func (m *Manager) ReadMemoryFile(filename string) (string, error) {
-	path := filepath.Join(m.workspaceDir, "memory", filename)
+	memoryDir := filepath.Join(m.workspaceDir, "memory")
+	path, ok := safeJoinUnderDir(memoryDir, filename)
+	if !ok {
+		// Treat traversal/invalid paths as a blocked read, not an OS error.
+		return "", nil
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -209,6 +246,9 @@ func (m *Manager) ListMemoryFiles() ([]string, error) {
 	memoryDir := filepath.Join(m.workspaceDir, "memory")
 	entries, err := os.ReadDir(memoryDir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 

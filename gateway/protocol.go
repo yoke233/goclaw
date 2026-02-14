@@ -3,6 +3,9 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 )
 
 // ProtocolVersion 当前协议版本
@@ -28,6 +31,41 @@ type JSONRPCRequest struct {
 	Params  map[string]interface{} `json:"params,omitempty"`
 }
 
+// UnmarshalJSON allows JSON-RPC id to be either string or number, and normalizes it to a string.
+func (r *JSONRPCRequest) UnmarshalJSON(data []byte) error {
+	var tmp struct {
+		JSONRPC string                 `json:"jsonrpc"`
+		ID      interface{}            `json:"id,omitempty"`
+		Method  string                 `json:"method"`
+		Params  map[string]interface{} `json:"params,omitempty"`
+	}
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+
+	r.JSONRPC = tmp.JSONRPC
+	r.Method = tmp.Method
+	r.Params = tmp.Params
+
+	switch v := tmp.ID.(type) {
+	case nil:
+		r.ID = ""
+	case string:
+		r.ID = v
+	case float64:
+		// JSON numbers are float64; preserve integer-like values as integers.
+		if math.Trunc(v) == v {
+			r.ID = strconv.FormatInt(int64(v), 10)
+		} else {
+			r.ID = strconv.FormatFloat(v, 'f', -1, 64)
+		}
+	default:
+		return fmt.Errorf("invalid id type: %T", tmp.ID)
+	}
+
+	return nil
+}
+
 // JSONRPCResponse JSON-RPC 响应
 type JSONRPCResponse struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -41,6 +79,15 @@ type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    string `json:"data,omitempty"`
+}
+
+// InvalidParamsError indicates request params are invalid.
+type InvalidParamsError struct {
+	Message string
+}
+
+func (e *InvalidParamsError) Error() string {
+	return e.Message
 }
 
 // Error codes
@@ -78,6 +125,15 @@ type MethodRegistry struct {
 	methods map[string]MethodHandler
 }
 
+// MethodNotFoundError is returned when a method is not registered.
+type MethodNotFoundError struct {
+	Method string
+}
+
+func (e *MethodNotFoundError) Error() string {
+	return fmt.Sprintf("method not found: %s", e.Method)
+}
+
 // MethodHandler 方法处理器
 type MethodHandler func(sessionID string, params map[string]interface{}) (interface{}, error)
 
@@ -97,7 +153,10 @@ func (r *MethodRegistry) Register(method string, handler MethodHandler) {
 func (r *MethodRegistry) Call(method string, sessionID string, params map[string]interface{}) (interface{}, error) {
 	handler, ok := r.methods[method]
 	if !ok {
-		return nil, fmt.Errorf("method not found: %s", method)
+		return nil, &MethodNotFoundError{Method: method}
+	}
+	if handler == nil {
+		return nil, fmt.Errorf("nil handler for method: %s", method)
 	}
 	return handler(sessionID, params)
 }
@@ -115,7 +174,7 @@ func ParseRequest(data []byte) (*JSONRPCRequest, error) {
 	}
 
 	// 验证方法名
-	if req.Method == "" {
+	if strings.TrimSpace(req.Method) == "" {
 		return nil, fmt.Errorf("method is required")
 	}
 

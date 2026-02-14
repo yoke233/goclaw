@@ -7,18 +7,21 @@ import (
 	"strings"
 
 	sdkconfig "github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/extensions"
 )
 
 // buildAgentSDKSettingsOverrides loads workspace MCP config and converts it to
-// agentsdk-go SettingsOverrides. Returns nil if there is no enabled MCP server.
-func buildAgentSDKSettingsOverrides(workspaceDir string) (*sdkconfig.Settings, []string) {
+// agentsdk-go SettingsOverrides. Returns nil if no overrides are needed.
+func buildAgentSDKSettingsOverrides(appCfg *config.Config, workspaceDir string, pluginCfg *extensions.AgentsConfig) (*sdkconfig.Settings, []string) {
 	// Prefer .agents/config.toml; fallback to legacy .goclaw/mcp.json.
 	cfgPath := extensions.AgentsConfigPath(workspaceDir)
 	cfg, err := extensions.LoadAgentsConfig(cfgPath)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("load agents config %s: %v", cfgPath, err)}
 	}
+	var warnings []string
+
 	if cfg == nil || len(cfg.MCPServers) == 0 {
 		legacyPath := extensions.MCPConfigPath(workspaceDir)
 		legacy, legacyErr := extensions.LoadMCPConfig(legacyPath)
@@ -26,13 +29,31 @@ func buildAgentSDKSettingsOverrides(workspaceDir string) (*sdkconfig.Settings, [
 			return nil, nil
 		}
 		if legacy == nil || len(legacy.Servers) == 0 {
-			return nil, nil
+			cfg = nil
+		} else {
+			cfg = convertLegacyMCPToAgentsConfig(legacy)
 		}
-		cfg = convertLegacyMCPToAgentsConfig(legacy)
+	}
+
+	if pluginCfg != nil && len(pluginCfg.MCPServers) > 0 {
+		cfg = extensions.MergeAgentsConfig(pluginCfg, cfg)
+	}
+
+	overrides := &sdkconfig.Settings{}
+
+	if ShouldPersistAgentSDKHistory(appCfg) {
+		days := AgentSDKHistoryCleanupDays(appCfg)
+		overrides.CleanupPeriodDays = &days
+	}
+
+	if cfg == nil || len(cfg.MCPServers) == 0 {
+		if overrides.CleanupPeriodDays == nil {
+			return nil, warnings
+		}
+		return overrides, warnings
 	}
 
 	enabled := make(map[string]sdkconfig.MCPServerConfig)
-	var warnings []string
 
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name := range cfg.MCPServers {
@@ -120,14 +141,16 @@ func buildAgentSDKSettingsOverrides(workspaceDir string) (*sdkconfig.Settings, [
 	}
 
 	if len(enabled) == 0 {
-		return nil, warnings
+		if overrides.CleanupPeriodDays == nil {
+			return nil, warnings
+		}
+		return overrides, warnings
 	}
 
-	return &sdkconfig.Settings{
-		MCP: &sdkconfig.MCPConfig{
-			Servers: enabled,
-		},
-	}, warnings
+	overrides.MCP = &sdkconfig.MCPConfig{
+		Servers: enabled,
+	}
+	return overrides, warnings
 }
 
 func convertLegacyMCPToAgentsConfig(cfg *extensions.MCPConfig) *extensions.AgentsConfig {

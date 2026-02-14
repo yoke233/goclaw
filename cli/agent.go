@@ -207,12 +207,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Register use_skill tool
-	if err := toolRegistry.RegisterExisting(tools.NewUseSkillTool()); err != nil && agentVerbose {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to register use_skill: %v\n", err)
-	}
-
-	// Register skills + MCP management tools (conversation-accessible)
+	// Register MCP management tools (conversation-accessible)
 	skillsRoleDir := "skills"
 	if sub := cfg.Agents.Defaults.Subagents; sub != nil {
 		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
@@ -220,11 +215,6 @@ func runAgent(cmd *cobra.Command, args []string) {
 		}
 	}
 	for _, tool := range []tools.Tool{
-		tools.NewSkillsListTool(workspace, skillsRoleDir),
-		tools.NewSkillsGetTool(workspace, skillsRoleDir),
-		tools.NewSkillsPutTool(workspace, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsDeleteTool(workspace, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsSetEnabledTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPListTool(workspace, skillsRoleDir),
 		tools.NewMCPPutServerTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPDeleteServerTool(workspace, skillsRoleDir, invalidateRuntime),
@@ -315,7 +305,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 		runAgentID = "default"
 	}
 
-	runSystemPrompt := contextBuilder.BuildSystemPrompt(nil)
+	runSystemPrompt := contextBuilder.BuildSystemPrompt()
 	runWorkspace := workspace
 
 	selectedAgent, ok := agentManager.GetAgent(runAgentID)
@@ -379,6 +369,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 	if err := sessionMgr.Save(sess); err != nil && agentVerbose {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to save session: %v\n", err)
 	}
+	_ = agent.CompareSessionHistory(cfg, sess, runWorkspace)
 	exportSessionMarkdown(cfg, sessionMgr, sess, agentVerbose)
 
 	// Output response

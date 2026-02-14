@@ -46,18 +46,12 @@ func (b *ContextBuilder) SetToolRegistry(registry *ToolRegistry) {
 }
 
 // BuildSystemPrompt 构建系统提示词
-func (b *ContextBuilder) BuildSystemPrompt(skills []*Skill) string {
-	return b.BuildSystemPromptWithMode(skills, PromptModeFull)
+func (b *ContextBuilder) BuildSystemPrompt() string {
+	return b.BuildSystemPromptWithMode(PromptModeFull)
 }
 
 // BuildSystemPromptWithMode 使用指定模式构建系统提示词
-func (b *ContextBuilder) BuildSystemPromptWithMode(skills []*Skill, mode PromptMode) string {
-	skillsContent := b.buildSkillsPrompt(skills, mode)
-	return b.buildSystemPromptWithSkills(skillsContent, mode)
-}
-
-// buildSystemPromptWithSkills 使用指定的技能内容和模式构建系统提示词
-func (b *ContextBuilder) buildSystemPromptWithSkills(skillsContent string, mode PromptMode) string {
+func (b *ContextBuilder) BuildSystemPromptWithMode(mode PromptMode) string {
 	isMinimal := mode == PromptModeMinimal || mode == PromptModeNone
 
 	// 对于 "none" 模式，只返回基本身份行
@@ -86,24 +80,19 @@ func (b *ContextBuilder) buildSystemPromptWithSkills(skillsContent string, mode 
 		parts = append(parts, b.buildRetryStrategy())
 	}
 
-	// 6. 技能系统
-	if skillsContent != "" {
-		parts = append(parts, skillsContent)
-	}
-
-	// 7. Bootstrap 文件
+	// 6. Bootstrap 文件
 	if bootstrap := b.loadBootstrapFiles(); bootstrap != "" {
 		parts = append(parts, "## Configuration\n\n"+bootstrap)
 	}
 
-	// 8. 记忆上下文
+	// 7. 记忆上下文
 	if !isMinimal {
 		if memContext, err := b.memory.GetMemoryContext(); err == nil && memContext != "" {
 			parts = append(parts, memContext)
 		}
 	}
 
-	// 9. 工作区和运行时信息
+	// 8. 工作区和运行时信息
 	parts = append(parts, b.buildWorkspace())
 	if !isMinimal {
 		parts = append(parts, b.buildRuntime())
@@ -133,7 +122,6 @@ func (b *ContextBuilder) buildIdentityAndTools() string {
 		"web_fetch":              "Fetch web pages",
 		"memory_search":          "Search stored memory for user preferences, prior decisions, and project context",
 		"memory_add":             "Persist durable facts and user preferences for future conversations",
-		"use_skill":              "Load a specialized skill. SKILLS HAVE HIGHEST PRIORITY - always check Skills section first before using other tools",
 		"sessions_spawn":         "Spawn a background sub-agent run for concurrent execution and automatically announce results back to the requester session",
 	}
 
@@ -158,23 +146,17 @@ If a task is more complex or takes longer, use smart_search first, then browser 
 
 ## CRITICAL RULES
 
-**Skill-First Workflow (HIGHEST PRIORITY):**
-1. **ALWAYS check the Skills section first** before using any other tools
-2. If a matching skill is found, use the use_skill tool with the skill name
-3. If no matching skill: use built-in tools or command tools of os
-4. Only after checking skills should you proceed with built-in tools
-
-**General Rules:**
-5. For ANY search request ("search for", "find", "google search", etc.): IMMEDIATELY call smart_search tool. DO NOT provide manual instructions or advice.
-6. When the user asks for information: USE YOUR TOOLS to get it. Do NOT explain how to get it.
-7. DO NOT tell the user "I cannot" or "here's how to do it yourself". ACTUALLY DO IT with tools.
-8. If you have tools available for a task, use them. No permission needed for safe operations.
-9. **NEVER HALLUCINATE SEARCH RESULTS**: When presenting search results, ONLY use the exact data returned by the tool. If no results were found, clearly state that no results were found.
-10. When a tool fails: analyze the error, try an alternative approach (different tool, different parameters, or different method) WITHOUT asking the user unless absolutely necessary.
-11. If the user states a durable preference, rule, or profile fact and memory_add is available: call memory_add proactively (prefer source=longterm, type=preference for user preferences), then continue normally.
-12. Before planning complex tasks (milestones, decomposition, staffing) and memory_search is available: first call memory_search to retrieve prior preferences/constraints, then produce the plan.
-13. When the user asks what skills/MCP/tools are available, or your plan depends on runtime capabilities: call skills_list and mcp_list (if available) to get the CURRENT state. Do not guess.
-14. NEVER ask the user to manually provide tool-call JSON/arguments unless they explicitly request debugging the tool call itself.`,
+1. Skill execution and skill management are handled by agentsdk-go and external skills. Do not ask users to manually operate skill internals.
+2. For ANY search request ("search for", "find", "google search", etc.): IMMEDIATELY call smart_search tool. DO NOT provide manual instructions or advice.
+3. When the user asks for information: USE YOUR TOOLS to get it. Do NOT explain how to get it.
+4. DO NOT tell the user "I cannot" or "here's how to do it yourself". ACTUALLY DO IT with tools.
+5. If you have tools available for a task, use them. No permission needed for safe operations.
+6. **NEVER HALLUCINATE SEARCH RESULTS**: When presenting search results, ONLY use the exact data returned by the tool. If no results were found, clearly state that no results were found.
+7. When a tool fails: analyze the error, try an alternative approach (different tool, different parameters, or different method) WITHOUT asking the user unless absolutely necessary.
+8. If the user states a durable preference, rule, or profile fact and memory_add is available: call memory_add proactively (prefer source=longterm, type=preference for user preferences), then continue normally.
+9. Before planning complex tasks (milestones, decomposition, staffing) and memory_search is available: first call memory_search to retrieve prior preferences/constraints, then produce the plan.
+10. When the user asks what MCP/tools are available, or your plan depends on runtime capabilities: call mcp_list (if available) to get the CURRENT state. Do not guess.
+11. NEVER ask the user to manually provide tool-call JSON/arguments unless they explicitly request debugging the tool call itself.`,
 		now.Format("2006-01-02 15:04:05 MST"),
 		b.workspace,
 		strings.Join(toolLines, "\n"))
@@ -185,7 +167,7 @@ func (b *ContextBuilder) buildToolSummaryLines(coreToolSummaries map[string]stri
 		"smart_search", "browser_navigate", "browser_screenshot", "browser_get_text",
 		"browser_click", "browser_fill_input", "browser_execute_script",
 		"read_file", "write_file", "list_files", "run_shell",
-		"web_search", "web_fetch", "memory_search", "memory_add", "use_skill", "sessions_spawn",
+		"web_search", "web_fetch", "memory_search", "memory_add", "sessions_spawn",
 	}
 
 	if b.tools == nil {
@@ -417,158 +399,17 @@ func (b *ContextBuilder) buildRuntime() string {
 Runtime: host=%s os=%s (%s) arch=%s`, host, runtime.GOOS, runtime.GOARCH, runtime.GOARCH)
 }
 
-// buildSkillsPrompt 构建技能提示词（摘要模式 - 第一阶段）
-func (b *ContextBuilder) buildSkillsPrompt(skills []*Skill, mode PromptMode) string {
-	if len(skills) == 0 || mode == PromptModeMinimal || mode == PromptModeNone {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## Skills (mandatory)\n\n")
-	sb.WriteString("Before replying: scan <available_skills> entries.\n")
-	sb.WriteString("- If exactly one skill clearly applies: output a tool call `use_skill` with the skill name as parameter.\n")
-	sb.WriteString("- If multiple could apply: choose the most specific one, then call `use_skill`.\n")
-	sb.WriteString("- If no matching skill: use built-in tools or command tools of os.\n")
-	sb.WriteString("Constraints: only use one skill at a time; the skill content will be injected after selection.\n\n")
-
-	for _, skill := range skills {
-		sb.WriteString(fmt.Sprintf("<skill name=\"%s\">\n", skill.Name))
-		sb.WriteString(fmt.Sprintf("**Name:** %s\n", skill.Name))
-		if skill.Description != "" {
-			sb.WriteString(fmt.Sprintf("**Description:** %s\n", skill.Description))
-		}
-		if skill.Author != "" {
-			sb.WriteString(fmt.Sprintf("**Author:** %s\n", skill.Author))
-		}
-		if skill.Version != "" {
-			sb.WriteString(fmt.Sprintf("**Version:** %s\n", skill.Version))
-		}
-
-		// 显示缺失依赖和安装命令
-		if skill.MissingDeps != nil {
-			sb.WriteString("**Missing Dependencies:**\n")
-			if len(skill.MissingDeps.PythonPkgs) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Python Packages: %v\n", skill.MissingDeps.PythonPkgs))
-				sb.WriteString("    Install commands:\n")
-				for _, pkg := range skill.MissingDeps.PythonPkgs {
-					sb.WriteString(fmt.Sprintf("      `python3 -m pip install %s`\n", pkg))
-					sb.WriteString(fmt.Sprintf("      Or via uv: `uv pip install %s`\n", pkg))
-				}
-			}
-			if len(skill.MissingDeps.NodePkgs) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Node.js Packages: %v\n", skill.MissingDeps.NodePkgs))
-				sb.WriteString("    Install commands:\n")
-				for _, pkg := range skill.MissingDeps.NodePkgs {
-					sb.WriteString(fmt.Sprintf("      `npm install -g %s`\n", pkg))
-					sb.WriteString(fmt.Sprintf("      Or via pnpm: `pnpm add -g %s`\n", pkg))
-				}
-			}
-			if len(skill.MissingDeps.Bins) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Binary dependencies: %v\n", skill.MissingDeps.Bins))
-				sb.WriteString("    You may need to install these tools first.\n")
-			}
-			if len(skill.MissingDeps.AnyBins) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Optional binary dependencies (one required): %v\n", skill.MissingDeps.AnyBins))
-				sb.WriteString("    Install at least one of these tools.\n")
-			}
-			if len(skill.MissingDeps.Env) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Environment variables: %v\n", skill.MissingDeps.Env))
-				sb.WriteString("    Set these environment variables before using the skill.\n")
-			}
-			sb.WriteString("\n")
-		}
-
-		sb.WriteString("</skill>\n\n")
-	}
-
-	return sb.String()
-}
-
-// buildSelectedSkills 构建选中技能的完整内容（第二阶段）
-func (b *ContextBuilder) buildSelectedSkills(selectedSkillNames []string, skills []*Skill) string {
-	if len(selectedSkillNames) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## Selected Skills (active)\n\n")
-
-	for _, skillName := range selectedSkillNames {
-		for _, skill := range skills {
-			if skill.Name == skillName {
-				sb.WriteString(fmt.Sprintf("<skill name=\"%s\">\n", skill.Name))
-				sb.WriteString(fmt.Sprintf("### %s\n", skill.Name))
-				if skill.Description != "" {
-					sb.WriteString(fmt.Sprintf("> Description: %s\n\n", skill.Description))
-				}
-
-				// 显示缺失依赖警告和安装命令
-				if skill.MissingDeps != nil {
-					sb.WriteString("**⚠️ MISSING DEPENDENCIES - Install before using:**\n\n")
-					if len(skill.MissingDeps.PythonPkgs) > 0 {
-						sb.WriteString(fmt.Sprintf("**Python Packages:** %v\n", skill.MissingDeps.PythonPkgs))
-						sb.WriteString("**Install commands:**\n")
-						for _, pkg := range skill.MissingDeps.PythonPkgs {
-							sb.WriteString(fmt.Sprintf("```bash\npython3 -m pip install %s\n# Or via uv: uv pip install %s\n```\n", pkg, pkg))
-						}
-						sb.WriteString("\n")
-					}
-					if len(skill.MissingDeps.NodePkgs) > 0 {
-						sb.WriteString(fmt.Sprintf("**Node.js Packages:** %v\n", skill.MissingDeps.NodePkgs))
-						sb.WriteString("**Install commands:**\n")
-						for _, pkg := range skill.MissingDeps.NodePkgs {
-							sb.WriteString(fmt.Sprintf("```bash\nnpm install -g %s\n# Or via pnpm: pnpm add -g %s\n```\n", pkg, pkg))
-						}
-						sb.WriteString("\n")
-					}
-					if len(skill.MissingDeps.Bins) > 0 {
-						sb.WriteString(fmt.Sprintf("**Binary dependencies:** %v\n", skill.MissingDeps.Bins))
-						sb.WriteString("You may need to install these tools first.\n\n")
-					}
-					if len(skill.MissingDeps.AnyBins) > 0 {
-						sb.WriteString(fmt.Sprintf("**Optional binary dependencies (one required):** %v\n", skill.MissingDeps.AnyBins))
-						sb.WriteString("Install at least one of these tools.\n\n")
-					}
-					if len(skill.MissingDeps.Env) > 0 {
-						sb.WriteString(fmt.Sprintf("**Environment variables:** %v\n", skill.MissingDeps.Env))
-						sb.WriteString("Set these environment variables before using the skill.\n\n")
-					}
-				}
-
-				// 注入技能正文内容
-				if skill.Content != "" {
-					sb.WriteString(skill.Content)
-				}
-				sb.WriteString("\n</skill>\n\n")
-				break
-			}
-		}
-	}
-
-	return sb.String()
-}
-
 // BuildMessages 构建消息列表
-func (b *ContextBuilder) BuildMessages(history []session.Message, currentMessage string, skills []*Skill, loadedSkills []string) []Message {
-	return b.BuildMessagesWithMode(history, currentMessage, skills, loadedSkills, PromptModeFull)
+func (b *ContextBuilder) BuildMessages(history []session.Message, currentMessage string) []Message {
+	return b.BuildMessagesWithMode(history, currentMessage, PromptModeFull)
 }
 
 // BuildMessagesWithMode 使用指定模式构建消息列表
-func (b *ContextBuilder) BuildMessagesWithMode(history []session.Message, currentMessage string, skills []*Skill, loadedSkills []string, mode PromptMode) []Message {
+func (b *ContextBuilder) BuildMessagesWithMode(history []session.Message, currentMessage string, mode PromptMode) []Message {
 	// 首先验证历史消息，过滤掉孤立的 tool 消息
 	validHistory := b.validateHistoryMessages(history)
 
-	// 构建系统提示词：根据是否已加载技能决定注入内容
-	var skillsContent string
-	if len(loadedSkills) > 0 {
-		// 第二阶段：注入已选中技能的完整内容
-		skillsContent = b.buildSelectedSkills(loadedSkills, skills)
-	} else {
-		// 第一阶段：只注入技能摘要
-		skillsContent = b.buildSkillsPrompt(skills, mode)
-	}
-
-	systemPrompt := b.buildSystemPromptWithSkills(skillsContent, mode)
+	systemPrompt := b.BuildSystemPromptWithMode(mode)
 
 	messages := []Message{
 		{

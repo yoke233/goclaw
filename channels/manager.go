@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,10 @@ func NewManager(bus *bus.MessageBus) *Manager {
 func (m *Manager) Register(channel BaseChannel) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if channel == nil {
+		return fmt.Errorf("channel cannot be nil")
+	}
 
 	name := channel.Name()
 	if _, ok := m.channels[name]; ok {
@@ -110,14 +115,15 @@ func (m *Manager) Status(name string) (map[string]interface{}, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	channel, ok := m.channels[name]
+	_, ok := m.channels[name]
 	if !ok {
 		return nil, fmt.Errorf("channel not found: %s", name)
 	}
 
 	// 简化的状态信息
 	return map[string]interface{}{
-		"name":    channel.Name(),
+		// Use the registered alias (key in manager map), not the underlying channel's base name.
+		"name":    name,
 		"enabled": true,
 	}, nil
 }
@@ -312,9 +318,13 @@ func (m *Manager) SetupFromConfig(cfg *config.Config) error {
 			for accountID, accountCfg := range cfg.Channels.Feishu.Accounts {
 				if accountCfg.Enabled && accountCfg.AppID != "" {
 					fsCfg := config.FeishuChannelConfig{
-						Enabled:           accountCfg.Enabled,
-						AppID:             accountCfg.AppID,
-						AppSecret:         accountCfg.AppSecret,
+						Enabled:    accountCfg.Enabled,
+						AppID:      accountCfg.AppID,
+						AppSecret:  accountCfg.AppSecret,
+						EncryptKey: cfg.Channels.Feishu.EncryptKey,
+						// Shared webhook verification settings live at the top-level config.
+						VerificationToken: cfg.Channels.Feishu.VerificationToken,
+						WebhookPort:       cfg.Channels.Feishu.WebhookPort,
 						AllowedIDs:        accountCfg.AllowedIDs,
 					}
 					channel, err := NewFeishuChannel(fsCfg, m.bus)
@@ -397,10 +407,14 @@ func (m *Manager) SetupFromConfig(cfg *config.Config) error {
 			for accountID, accountCfg := range cfg.Channels.WeWork.Accounts {
 				if accountCfg.Enabled && accountCfg.CorpID != "" {
 					wwCfg := config.WeWorkChannelConfig{
-						Enabled:        accountCfg.Enabled,
-						CorpID:         accountCfg.CorpID,
-						AgentID:        accountCfg.AgentID,
-						Secret:         accountCfg.AppSecret,
+						Enabled: accountCfg.Enabled,
+						CorpID:  accountCfg.CorpID,
+						AgentID: accountCfg.AgentID,
+						Secret:  accountCfg.AppSecret,
+						// Shared webhook verification/encryption settings live at the top-level config.
+						Token:          cfg.Channels.WeWork.Token,
+						EncodingAESKey: cfg.Channels.WeWork.EncodingAESKey,
+						WebhookPort:    cfg.Channels.WeWork.WebhookPort,
 						AllowedIDs:     accountCfg.AllowedIDs,
 					}
 					channel, err := NewWeWorkChannel(wwCfg, m.bus)
@@ -438,10 +452,10 @@ func (m *Manager) SetupFromConfig(cfg *config.Config) error {
 			for accountID, accountCfg := range cfg.Channels.DingTalk.Accounts {
 				if accountCfg.Enabled && accountCfg.ClientID != "" {
 					dtCfg := config.DingTalkChannelConfig{
-						Enabled:       accountCfg.Enabled,
-						ClientID:      accountCfg.ClientID,
-						ClientSecret:  accountCfg.ClientSecret,
-						AllowedIDs:    accountCfg.AllowedIDs,
+						Enabled:      accountCfg.Enabled,
+						ClientID:     accountCfg.ClientID,
+						ClientSecret: accountCfg.ClientSecret,
+						AllowedIDs:   accountCfg.AllowedIDs,
 					}
 					channel, err := NewDingTalkChannel(dtCfg, m.bus)
 					if err != nil {
@@ -486,6 +500,13 @@ func buildChannelName(channelType, accountID string) string {
 func (m *Manager) RegisterWithName(channel BaseChannel, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if channel == nil {
+		return fmt.Errorf("channel cannot be nil")
+	}
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("channel name cannot be empty")
+	}
 
 	if _, ok := m.channels[name]; ok {
 		return fmt.Errorf("channel %s already registered", name)

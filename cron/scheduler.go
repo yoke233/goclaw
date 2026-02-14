@@ -3,6 +3,7 @@ package cron
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +88,13 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) AddJob(job *Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if job == nil {
+		return fmt.Errorf("job cannot be nil")
+	}
+	if strings.TrimSpace(job.ID) == "" {
+		return fmt.Errorf("job id cannot be empty")
+	}
 
 	if _, ok := s.jobs[job.ID]; ok {
 		return fmt.Errorf("job %s already exists", job.ID)

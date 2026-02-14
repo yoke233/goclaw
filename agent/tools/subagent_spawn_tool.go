@@ -297,7 +297,20 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		return t.marshalResult(result), nil
 	}
 
+	// Reject invalid timeouts early.
+	if spawnParams.RunTimeoutSeconds < 0 {
+		result := &SubagentSpawnResult{
+			Status: "error",
+			Error:  "run_timeout_seconds must be >= 0",
+		}
+		return t.marshalResult(result), nil
+	}
+
+	// Normalize agent id before any permission checks.
+	spawnParams.AgentID = strings.TrimSpace(spawnParams.AgentID)
+
 	// 规范化清理策略
+	spawnParams.Cleanup = strings.ToLower(strings.TrimSpace(spawnParams.Cleanup))
 	if spawnParams.Cleanup != "delete" && spawnParams.Cleanup != "keep" {
 		spawnParams.Cleanup = "keep"
 	}
@@ -462,7 +475,7 @@ func (t *SubagentSpawnTool) parseParams(params map[string]interface{}) (*Subagen
 	// 解析 agent_id
 	if val, ok := params["agent_id"]; ok {
 		if str, ok := val.(string); ok {
-			result.AgentID = str
+			result.AgentID = strings.TrimSpace(str)
 		}
 	}
 
@@ -507,7 +520,7 @@ func (t *SubagentSpawnTool) parseParams(params map[string]interface{}) (*Subagen
 	// 解析 cleanup
 	if val, ok := params["cleanup"]; ok {
 		if str, ok := val.(string); ok {
-			result.Cleanup = str
+			result.Cleanup = strings.TrimSpace(str)
 		}
 	}
 

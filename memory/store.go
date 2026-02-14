@@ -271,6 +271,10 @@ func (s *SQLiteStore) Add(embedding *VectorEmbedding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Probe feature flags before starting a transaction to avoid deadlocks when MaxOpenConns=1.
+	vectorEnabled := s.isVectorEnabled()
+	ftsEnabled := s.isFTSEnabled()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -315,14 +319,14 @@ func (s *SQLiteStore) Add(embedding *VectorEmbedding) error {
 	}
 
 	// Insert into vector table if enabled
-	if s.isVectorEnabled() && len(embedding.Vector) > 0 {
+	if vectorEnabled && len(embedding.Vector) > 0 {
 		if err := s.insertVector(tx, embedding.ID, embedding.Vector); err != nil {
 			return fmt.Errorf("failed to insert vector: %w", err)
 		}
 	}
 
 	// Insert into FTS if enabled
-	if s.isFTSEnabled() {
+	if ftsEnabled {
 		if err := s.insertFTS(tx, embedding); err != nil {
 			return fmt.Errorf("failed to insert FTS: %w", err)
 		}
@@ -339,6 +343,10 @@ func (s *SQLiteStore) Add(embedding *VectorEmbedding) error {
 func (s *SQLiteStore) AddBatch(embeddings []*VectorEmbedding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Probe feature flags before starting a transaction to avoid deadlocks when MaxOpenConns=1.
+	vectorEnabled := s.isVectorEnabled()
+	ftsEnabled := s.isFTSEnabled()
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -391,13 +399,13 @@ func (s *SQLiteStore) AddBatch(embeddings []*VectorEmbedding) error {
 			return fmt.Errorf("failed to insert memory %s: %w", emb.ID, err)
 		}
 
-		if s.isVectorEnabled() && len(emb.Vector) > 0 {
+		if vectorEnabled && len(emb.Vector) > 0 {
 			if err := s.insertVector(tx, emb.ID, emb.Vector); err != nil {
 				return fmt.Errorf("failed to insert vector for %s: %w", emb.ID, err)
 			}
 		}
 
-		if s.isFTSEnabled() {
+		if ftsEnabled {
 			if err := s.insertFTS(tx, emb); err != nil {
 				return fmt.Errorf("failed to insert FTS for %s: %w", emb.ID, err)
 			}
@@ -914,7 +922,7 @@ func sourcePlaceholders(sources []MemorySource) string {
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	return "(" + joinString(placeholders, ",") + ")"
+	return joinString(placeholders, ",")
 }
 
 func typePlaceholders(types []MemoryType) string {
@@ -925,7 +933,7 @@ func typePlaceholders(types []MemoryType) string {
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	return "(" + joinString(placeholders, ",") + ")"
+	return joinString(placeholders, ",")
 }
 
 func appendSources(args []interface{}, sources []MemorySource) []interface{} {

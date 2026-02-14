@@ -33,12 +33,13 @@ type AgentsConfig struct {
 
 // AgentDefaults Agent 默认配置
 type AgentDefaults struct {
-	Model         string           `mapstructure:"model" json:"model"`
-	MaxIterations int              `mapstructure:"max_iterations" json:"max_iterations"`
-	Temperature   float64          `mapstructure:"temperature" json:"temperature"`
-	MaxTokens     int              `mapstructure:"max_tokens" json:"max_tokens"`
-	Inbound       InboundConfig    `mapstructure:"inbound" json:"inbound"`
-	Subagents     *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
+	Model         string             `mapstructure:"model" json:"model"`
+	MaxIterations int                `mapstructure:"max_iterations" json:"max_iterations"`
+	Temperature   float64            `mapstructure:"temperature" json:"temperature"`
+	MaxTokens     int                `mapstructure:"max_tokens" json:"max_tokens"`
+	Inbound       InboundConfig      `mapstructure:"inbound" json:"inbound"`
+	Subagents     *SubagentsConfig   `mapstructure:"subagents" json:"subagents"`
+	History       AgentHistoryConfig `mapstructure:"history" json:"history"`
 }
 
 // InboundConfig controls how inbound chat messages are dispatched and processed.
@@ -73,6 +74,16 @@ type AgentSubagentConfig struct {
 	TimeoutSeconds int      `mapstructure:"timeout_seconds" json:"timeout_seconds"`
 	DenyTools      []string `mapstructure:"deny_tools" json:"deny_tools"`
 	AllowTools     []string `mapstructure:"allow_tools" json:"allow_tools"`
+}
+
+// AgentHistoryConfig controls agentsdk-go history persistence behavior.
+type AgentHistoryConfig struct {
+	// Mode controls persistence strategy: session_only | dual | agentsdk_only.
+	Mode string `mapstructure:"mode" json:"mode"`
+	// Compare enables consistency checks between session and agentsdk history.
+	Compare bool `mapstructure:"compare" json:"compare"`
+	// AgentsdkCleanupDays controls retention for agentsdk-go history files.
+	AgentsdkCleanupDays int `mapstructure:"agentsdk_cleanup_days" json:"agentsdk_cleanup_days"`
 }
 
 // AgentConfig Agent 配置

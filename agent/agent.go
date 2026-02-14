@@ -34,7 +34,7 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 
 	state := NewAgentState()
 	if cfg.Context != nil {
-		state.SystemPrompt = cfg.Context.BuildSystemPrompt(nil)
+		state.SystemPrompt = cfg.Context.BuildSystemPrompt()
 	}
 	state.SessionKey = "main"
 

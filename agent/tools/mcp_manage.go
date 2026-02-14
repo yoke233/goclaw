@@ -289,6 +289,12 @@ func NewMCPPutServerTool(workspaceDir, skillsRoleDir string, invalidate RuntimeI
 			command := strings.TrimSpace(asString(params["command"]))
 			url := strings.TrimSpace(asString(params["url"]))
 
+			// Disallow ambiguous transport configuration.
+			// A server is either stdio (command/args) or http/sse (url); setting both is a config error.
+			if command != "" && url != "" {
+				return marshalMCPError(target, cfgPath, "command and url cannot both be set"), nil
+			}
+
 			if typ == "" {
 				switch {
 				case command != "":

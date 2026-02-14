@@ -110,3 +110,67 @@ func TestSubagentSpawnToolExecuteTimeoutOverride(t *testing.T) {
 		t.Fatalf("TimeoutSeconds = %d, want %d", registry.params.TimeoutSeconds, 45)
 	}
 }
+
+func TestSubagentSpawnToolExecuteRejectsNegativeTimeout(t *testing.T) {
+	registry := &mockSubagentRegistry{}
+	tool := NewSubagentSpawnTool(registry)
+	tool.SetDefaultConfigGetter(func() *config.AgentDefaults { return nil })
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"task":                "run diagnostics",
+		"run_timeout_seconds": -10,
+	})
+	if err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
+	}
+	if !strings.HasPrefix(result, "Error:") {
+		t.Fatalf("expected negative timeout to be rejected, got result: %s", result)
+	}
+	if registry.called {
+		t.Fatalf("registry.RegisterRun should not be called for invalid timeout")
+	}
+}
+
+func TestSubagentSpawnToolExecuteNormalizesCleanupPolicy(t *testing.T) {
+	registry := &mockSubagentRegistry{}
+	tool := NewSubagentSpawnTool(registry)
+	tool.SetDefaultConfigGetter(func() *config.AgentDefaults { return nil })
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"task":    "refactor parser",
+		"cleanup": "  DELETE  ",
+	})
+	if err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
+	}
+	if !strings.Contains(result, "Subagent spawned successfully.") {
+		t.Fatalf("unexpected result text: %s", result)
+	}
+	if registry.params == nil {
+		t.Fatalf("registry params should not be nil")
+	}
+	if registry.params.Cleanup != "delete" {
+		t.Fatalf("Cleanup = %q, want %q", registry.params.Cleanup, "delete")
+	}
+}
+
+func TestSubagentSpawnToolExecuteTrimsAgentIDBeforePermissionCheck(t *testing.T) {
+	registry := &mockSubagentRegistry{}
+	tool := NewSubagentSpawnTool(registry)
+	tool.SetDefaultConfigGetter(func() *config.AgentDefaults { return nil })
+
+	ctx := context.WithValue(context.Background(), agentruntime.CtxAgentID, "assistant-main")
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"task":     "collect metrics",
+		"agent_id": "  assistant-main  ",
+	})
+	if err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
+	}
+	if !strings.Contains(result, "Subagent spawned successfully.") {
+		t.Fatalf("expected same agent id with whitespace to be accepted, got: %s", result)
+	}
+	if !registry.called {
+		t.Fatalf("registry.RegisterRun should be called for same-agent spawn")
+	}
+}

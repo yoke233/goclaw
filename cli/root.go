@@ -88,7 +88,6 @@ func init() {
 	rootCmd.AddCommand(onboardCmd)
 
 	// Register memory and logs commands from commands package
-	// Note: skills command is already registered in cli/skills.go
 	rootCmd.AddCommand(commands.MemoryCmd)
 	rootCmd.AddCommand(commands.LogsCmd)
 
@@ -118,11 +117,6 @@ func Execute() error {
 
 // runStart 启动 Agent
 func runStart(cmd *cobra.Command, args []string) {
-	// 确保内置技能被复制到用户目录
-	if err := internal.EnsureBuiltinSkills(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to ensure builtin skills: %v\n", err)
-	}
-
 	// 确保配置文件存在
 	configCreated, err := internal.EnsureConfig()
 	if err != nil {
@@ -223,19 +217,6 @@ func runStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// 创建技能加载器（统一使用 ~/.goclaw/skills 目录）
-	goclawDir := filepath.Join(homeDir, ".goclaw")
-	skillsDir := filepath.Join(goclawDir, "skills")
-	skillsLoader := agent.NewSkillsLoader(goclawDir, []string{skillsDir})
-	if err := skillsLoader.Discover(); err != nil {
-		logger.Warn("Failed to discover skills", zap.Error(err))
-	} else {
-		skills := skillsLoader.List()
-		if len(skills) > 0 {
-			logger.Info("Skills loaded", zap.Int("count", len(skills)))
-		}
-	}
-
 	// 注册文件系统工具
 	fsTool := tools.NewFileSystemTool(cfg.Tools.FileSystem.AllowedPaths, cfg.Tools.FileSystem.DeniedPaths, workspaceDir)
 	for _, tool := range fsTool.GetTools() {
@@ -244,12 +225,7 @@ func runStart(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// 注册 use_skill 工具（用于两阶段技能加载）
-	if err := toolRegistry.RegisterExisting(tools.NewUseSkillTool()); err != nil {
-		logger.Warn("Failed to register use_skill tool", zap.Error(err))
-	}
-
-	// ========== Skills + MCP 动态管理工具（对话可用）==========
+	// ========== MCP 动态管理工具（对话可用）==========
 	skillsRoleDir := "skills"
 	if sub := cfg.Agents.Defaults.Subagents; sub != nil {
 		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
@@ -258,11 +234,6 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 
 	for _, tool := range []tools.Tool{
-		tools.NewSkillsListTool(workspaceDir, skillsRoleDir),
-		tools.NewSkillsGetTool(workspaceDir, skillsRoleDir),
-		tools.NewSkillsPutTool(workspaceDir, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsDeleteTool(workspaceDir, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsSetEnabledTool(workspaceDir, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPListTool(workspaceDir, skillsRoleDir),
 		tools.NewMCPPutServerTool(workspaceDir, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPDeleteServerTool(workspaceDir, skillsRoleDir, invalidateRuntime),
@@ -404,6 +375,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	if err := agentManager.SetupFromConfig(cfg, contextBuilder); err != nil {
 		logger.Fatal("Failed to setup agent manager", zap.Error(err))
 	}
+	gatewayServer.SetAgentManager(agentManager)
 
 	// 处理信号
 	sigChan := make(chan os.Signal, 1)

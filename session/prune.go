@@ -292,9 +292,13 @@ func (p *Pruner) PruneMessages(sessionKey string, preserveCount int) error {
 		return nil
 	}
 
-	// Remove oldest messages
+	if preserveCount < 0 {
+		preserveCount = 0
+	}
+
+	// Keep the most recent preserveCount messages (prune from the front).
 	prunedCount := len(session.Messages) - preserveCount
-	session.Messages = session.Messages[preserveCount:]
+	session.Messages = session.Messages[len(session.Messages)-preserveCount:]
 
 	p.stats.MessagesPruned += int64(prunedCount)
 	p.stats.LastPruneAt = time.Now()
@@ -315,21 +319,28 @@ func (p *Pruner) PruneMessagesByTTL(sessionKey string) error {
 	now := time.Now()
 	cutoff := now.Add(-p.config.DefaultMessageTTL)
 
-	// Find first message within TTL
-	firstValid := 0
-	for i, msg := range session.Messages {
-		if msg.Timestamp.After(cutoff) {
-			firstValid = i
-			break
+	// Messages may be out-of-order, so filter rather than slicing from the front.
+	originalLen := len(session.Messages)
+	if originalLen == 0 {
+		return nil
+	}
+
+	kept := make([]Message, 0, originalLen)
+	for _, msg := range session.Messages {
+		// Keep messages that are within TTL (timestamp >= cutoff).
+		if !msg.Timestamp.Before(cutoff) {
+			kept = append(kept, msg)
 		}
 	}
 
-	if firstValid > 0 {
-		prunedCount := firstValid
-		session.Messages = session.Messages[firstValid:]
-		p.stats.MessagesPruned += int64(prunedCount)
-		p.stats.LastPruneAt = time.Now()
+	prunedCount := originalLen - len(kept)
+	if prunedCount == 0 {
+		return nil
 	}
+
+	session.Messages = kept
+	p.stats.MessagesPruned += int64(prunedCount)
+	p.stats.LastPruneAt = time.Now()
 
 	return nil
 }
@@ -495,18 +506,15 @@ func (p *Pruner) CompactSession(sessionKey string) error {
 
 // Cleanup removes expired data and optimizes storage
 func (p *Pruner) Cleanup() error {
+	// IMPORTANT: PruneSessions() takes p.mu; do not call it while holding the same lock
+	// or Cleanup will deadlock. We still run TTL pruning under lock to preserve existing
+	// concurrency expectations of prune* methods.
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Run TTL-based pruning first
-	if err := p.pruneTTL(); err != nil {
+	err := p.pruneTTL()
+	p.mu.Unlock()
+	if err != nil {
 		return err
 	}
 
-	// Then run strategy-based pruning
-	if err := p.PruneSessions(); err != nil {
-		return err
-	}
-
-	return nil
+	return p.PruneSessions()
 }

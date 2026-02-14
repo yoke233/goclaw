@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -86,12 +87,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agents.defaults.subagents.timeout_seconds", 900)
 	v.SetDefault("agents.defaults.subagents.skills_role_dir", "skills")
 	v.SetDefault("agents.defaults.subagents.workdir_base", "subagents")
+	v.SetDefault("agents.defaults.history.mode", "session_only")
+	v.SetDefault("agents.defaults.history.compare", false)
+	v.SetDefault("agents.defaults.history.agentsdk_cleanup_days", 7)
 
 	// Gateway 默认配置
 	v.SetDefault("gateway.host", "localhost")
 	v.SetDefault("gateway.port", 8080)
-	v.SetDefault("gateway.read_timeout", 30)
-	v.SetDefault("gateway.write_timeout", 30)
+	// Use time.Duration defaults; plain integers would become nanoseconds when unmarshaled.
+	v.SetDefault("gateway.read_timeout", 30*time.Second)
+	v.SetDefault("gateway.write_timeout", 30*time.Second)
 
 	// 工具默认配置
 	v.SetDefault("tools.shell.enabled", true)
@@ -163,8 +168,20 @@ func GetDefaultConfigPath() (string, error) {
 // GetWorkspacePath 获取 workspace 目录路径
 func GetWorkspacePath(cfg *Config) (string, error) {
 	if cfg.Workspace.Path != "" {
-		// 使用配置中的自定义路径
-		return cfg.Workspace.Path, nil
+		// 使用配置中的自定义路径（支持 "~" 展开）
+		p := strings.TrimSpace(cfg.Workspace.Path)
+		if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
+			home, err := ResolveUserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("failed to get home directory: %w", err)
+			}
+			rest := strings.TrimLeft(p[1:], "/\\")
+			if rest == "" {
+				return filepath.Clean(home), nil
+			}
+			return filepath.Join(home, filepath.FromSlash(rest)), nil
+		}
+		return p, nil
 	}
 	// 使用默认路径
 	home, err := ResolveUserHomeDir()
@@ -234,6 +251,19 @@ func validateAgents(cfg *Config) error {
 		return fmt.Errorf("max_tokens must be positive")
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(cfg.Agents.Defaults.History.Mode))
+	if mode == "" {
+		mode = "session_only"
+	}
+	switch mode {
+	case "session_only", "dual", "agentsdk_only":
+	default:
+		return fmt.Errorf("agents.defaults.history.mode must be session_only, dual, or agentsdk_only")
+	}
+	if cfg.Agents.Defaults.History.AgentsdkCleanupDays < 0 {
+		return fmt.Errorf("agents.defaults.history.agentsdk_cleanup_days must be non-negative")
+	}
+
 	return nil
 }
 
@@ -272,62 +302,246 @@ func validateProviders(cfg *Config) error {
 
 // validateChannels 验证通道配置
 func validateChannels(cfg *Config) error {
+	validateTelegramToken := func(token string) error {
+		// Telegram bot tokens are commonly "<bot_id>:<secret>" (no "bot" prefix).
+		// Keep validation lightweight: require a single ':' separator and no whitespace.
+		tok := strings.TrimSpace(token)
+		if tok != token {
+			return fmt.Errorf("telegram token must not contain leading/trailing whitespace")
+		}
+		parts := strings.Split(tok, ":")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return fmt.Errorf("telegram token must look like '<bot_id>:<secret>'")
+		}
+		return nil
+	}
+
+	validateWhatsAppBridgeURL := func(url string) error {
+		u := strings.TrimSpace(url)
+		if u == "" {
+			return fmt.Errorf("whatsapp bridge_url is required when enabled")
+		}
+		if !strings.HasPrefix(u, "http") {
+			return fmt.Errorf("whatsapp bridge_url must be a valid URL")
+		}
+		return nil
+	}
+
 	// Telegram
 	if cfg.Channels.Telegram.Enabled {
-		if cfg.Channels.Telegram.Token == "" {
-			return fmt.Errorf("telegram token is required when enabled")
-		}
-		if !strings.HasPrefix(cfg.Channels.Telegram.Token, "bot") {
-			return fmt.Errorf("telegram token must start with 'bot'")
+		if len(cfg.Channels.Telegram.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.Telegram.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if err := validateTelegramToken(accountCfg.Token); err != nil {
+					return err
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level token as fallback.
+				if strings.TrimSpace(cfg.Channels.Telegram.Token) == "" {
+					return fmt.Errorf("telegram token is required when enabled")
+				}
+				if err := validateTelegramToken(cfg.Channels.Telegram.Token); err != nil {
+					return err
+				}
+			}
+		} else {
+			if strings.TrimSpace(cfg.Channels.Telegram.Token) == "" {
+				return fmt.Errorf("telegram token is required when enabled")
+			}
+			if err := validateTelegramToken(cfg.Channels.Telegram.Token); err != nil {
+				return err
+			}
 		}
 	}
 
 	// WhatsApp
 	if cfg.Channels.WhatsApp.Enabled {
-		if cfg.Channels.WhatsApp.BridgeURL == "" {
-			return fmt.Errorf("whatsapp bridge_url is required when enabled")
-		}
-		if !strings.HasPrefix(cfg.Channels.WhatsApp.BridgeURL, "http") {
-			return fmt.Errorf("whatsapp bridge_url must be a valid URL")
+		if len(cfg.Channels.WhatsApp.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.WhatsApp.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if err := validateWhatsAppBridgeURL(accountCfg.BridgeURL); err != nil {
+					return err
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level bridge_url as fallback.
+				if err := validateWhatsAppBridgeURL(cfg.Channels.WhatsApp.BridgeURL); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := validateWhatsAppBridgeURL(cfg.Channels.WhatsApp.BridgeURL); err != nil {
+				return err
+			}
 		}
 	}
 
 	// Feishu
 	if cfg.Channels.Feishu.Enabled {
-		if cfg.Channels.Feishu.AppID == "" {
-			return fmt.Errorf("feishu app_id is required when enabled")
-		}
-		if cfg.Channels.Feishu.AppSecret == "" {
-			return fmt.Errorf("feishu app_secret is required when enabled")
-		}
-		if cfg.Channels.Feishu.VerificationToken == "" {
+		// Verification token is a shared webhook security setting (not per-account).
+		if strings.TrimSpace(cfg.Channels.Feishu.VerificationToken) == "" {
 			return fmt.Errorf("feishu verification_token is required when enabled")
+		}
+
+		if len(cfg.Channels.Feishu.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.Feishu.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if strings.TrimSpace(accountCfg.AppID) == "" {
+					return fmt.Errorf("feishu app_id is required when enabled")
+				}
+				if strings.TrimSpace(accountCfg.AppSecret) == "" {
+					return fmt.Errorf("feishu app_secret is required when enabled")
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level credentials as fallback.
+				if strings.TrimSpace(cfg.Channels.Feishu.AppID) == "" {
+					return fmt.Errorf("feishu app_id is required when enabled")
+				}
+				if strings.TrimSpace(cfg.Channels.Feishu.AppSecret) == "" {
+					return fmt.Errorf("feishu app_secret is required when enabled")
+				}
+			}
+		} else {
+			if strings.TrimSpace(cfg.Channels.Feishu.AppID) == "" {
+				return fmt.Errorf("feishu app_id is required when enabled")
+			}
+			if strings.TrimSpace(cfg.Channels.Feishu.AppSecret) == "" {
+				return fmt.Errorf("feishu app_secret is required when enabled")
+			}
 		}
 	}
 
 	// QQ
 	if cfg.Channels.QQ.Enabled {
-		if cfg.Channels.QQ.AppID == "" {
-			return fmt.Errorf("qq app_id is required when enabled")
-		}
-		if cfg.Channels.QQ.AppSecret == "" {
-			return fmt.Errorf("qq app_secret is required when enabled")
+		if len(cfg.Channels.QQ.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.QQ.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if strings.TrimSpace(accountCfg.AppID) == "" {
+					return fmt.Errorf("qq app_id is required when enabled")
+				}
+				if strings.TrimSpace(accountCfg.AppSecret) == "" {
+					return fmt.Errorf("qq app_secret is required when enabled")
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level credentials as fallback.
+				if strings.TrimSpace(cfg.Channels.QQ.AppID) == "" {
+					return fmt.Errorf("qq app_id is required when enabled")
+				}
+				if strings.TrimSpace(cfg.Channels.QQ.AppSecret) == "" {
+					return fmt.Errorf("qq app_secret is required when enabled")
+				}
+			}
+		} else {
+			if strings.TrimSpace(cfg.Channels.QQ.AppID) == "" {
+				return fmt.Errorf("qq app_id is required when enabled")
+			}
+			if strings.TrimSpace(cfg.Channels.QQ.AppSecret) == "" {
+				return fmt.Errorf("qq app_secret is required when enabled")
+			}
 		}
 	}
 
 	// WeWork (企业微信)
 	if cfg.Channels.WeWork.Enabled {
-		if cfg.Channels.WeWork.CorpID == "" {
-			return fmt.Errorf("wework corp_id is required when enabled")
-		}
-		if cfg.Channels.WeWork.Secret == "" {
-			return fmt.Errorf("wework secret is required when enabled")
-		}
-		if cfg.Channels.WeWork.AgentID == "" {
-			return fmt.Errorf("wework agent_id is required when enabled")
-		}
 		if cfg.Channels.WeWork.WebhookPort < 0 || cfg.Channels.WeWork.WebhookPort > 65535 {
 			return fmt.Errorf("wework webhook_port must be between 0 and 65535")
+		}
+
+		if len(cfg.Channels.WeWork.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.WeWork.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if strings.TrimSpace(accountCfg.CorpID) == "" {
+					return fmt.Errorf("wework corp_id is required when enabled")
+				}
+				// accountCfg.AgentID is reused by WeWork.
+				if strings.TrimSpace(accountCfg.AgentID) == "" {
+					return fmt.Errorf("wework agent_id is required when enabled")
+				}
+				// accountCfg.AppSecret is reused as WeWork secret.
+				if strings.TrimSpace(accountCfg.AppSecret) == "" {
+					return fmt.Errorf("wework secret is required when enabled")
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level credentials as fallback.
+				if strings.TrimSpace(cfg.Channels.WeWork.CorpID) == "" {
+					return fmt.Errorf("wework corp_id is required when enabled")
+				}
+				if strings.TrimSpace(cfg.Channels.WeWork.Secret) == "" {
+					return fmt.Errorf("wework secret is required when enabled")
+				}
+				if strings.TrimSpace(cfg.Channels.WeWork.AgentID) == "" {
+					return fmt.Errorf("wework agent_id is required when enabled")
+				}
+			}
+		} else {
+			if strings.TrimSpace(cfg.Channels.WeWork.CorpID) == "" {
+				return fmt.Errorf("wework corp_id is required when enabled")
+			}
+			if strings.TrimSpace(cfg.Channels.WeWork.Secret) == "" {
+				return fmt.Errorf("wework secret is required when enabled")
+			}
+			if strings.TrimSpace(cfg.Channels.WeWork.AgentID) == "" {
+				return fmt.Errorf("wework agent_id is required when enabled")
+			}
+		}
+	}
+
+	// DingTalk
+	if cfg.Channels.DingTalk.Enabled {
+		if len(cfg.Channels.DingTalk.Accounts) > 0 {
+			enabledCount := 0
+			for _, accountCfg := range cfg.Channels.DingTalk.Accounts {
+				if !accountCfg.Enabled {
+					continue
+				}
+				enabledCount++
+				if strings.TrimSpace(accountCfg.ClientID) == "" {
+					return fmt.Errorf("dingtalk client_id is required when enabled")
+				}
+				if strings.TrimSpace(accountCfg.ClientSecret) == "" {
+					return fmt.Errorf("dingtalk client_secret is required when enabled")
+				}
+			}
+			if enabledCount == 0 {
+				// Enabled=true but no enabled accounts; allow legacy top-level credentials as fallback.
+				if strings.TrimSpace(cfg.Channels.DingTalk.ClientID) == "" {
+					return fmt.Errorf("dingtalk client_id is required when enabled")
+				}
+				if strings.TrimSpace(cfg.Channels.DingTalk.ClientSecret) == "" {
+					return fmt.Errorf("dingtalk client_secret is required when enabled")
+				}
+			}
+		} else {
+			if strings.TrimSpace(cfg.Channels.DingTalk.ClientID) == "" {
+				return fmt.Errorf("dingtalk client_id is required when enabled")
+			}
+			if strings.TrimSpace(cfg.Channels.DingTalk.ClientSecret) == "" {
+				return fmt.Errorf("dingtalk client_secret is required when enabled")
+			}
 		}
 	}
 

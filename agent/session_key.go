@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // SessionKeyOptions controls how a session key is generated.
@@ -39,11 +41,8 @@ func ResolveSessionKey(opts SessionKeyOptions) (string, bool) {
 	}
 
 	if opts.FreshOnDefault && strings.EqualFold(chatID, "default") {
-		now := opts.Now
-		if now.IsZero() {
-			now = time.Now()
-		}
-		return fmt.Sprintf("%s:%s:%d", channel, accountID, now.Unix()), true
+		// Fresh keys must be unique even under rapid creation. Avoid Unix() second resolution.
+		return fmt.Sprintf("%s:%s:%s", channel, accountID, uuid.NewString()), true
 	}
 
 	return fmt.Sprintf("%s:%s:%s", channel, accountID, chatID), false

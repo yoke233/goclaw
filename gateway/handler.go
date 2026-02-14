@@ -3,9 +3,12 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/channels"
 	"github.com/smallnest/goclaw/internal/logger"
@@ -19,6 +22,8 @@ type Handler struct {
 	bus        *bus.MessageBus
 	sessionMgr *session.Manager
 	channelMgr *channels.Manager
+	agentMgr   *agent.AgentManager
+	notifier   SessionNotifier
 }
 
 // NewHandler 创建处理器
@@ -45,15 +50,38 @@ func NewHandler(messageBus *bus.MessageBus, sessionMgr *session.Manager, channel
 	return h
 }
 
+// SetAgentManager injects an agent manager for streaming requests.
+func (h *Handler) SetAgentManager(manager *agent.AgentManager) {
+	h.agentMgr = manager
+}
+
+// SetNotifier injects a session notifier for streaming events.
+func (h *Handler) SetNotifier(notifier SessionNotifier) {
+	h.notifier = notifier
+}
+
 // HandleRequest 处理请求
 func (h *Handler) HandleRequest(sessionID string, req *JSONRPCRequest) *JSONRPCResponse {
+	if req == nil {
+		return NewErrorResponse("", ErrorInvalidRequest, "nil request")
+	}
+
 	result, err := h.registry.Call(req.Method, sessionID, req.Params)
 	if err != nil {
 		logger.Error("Method execution failed",
 			zap.String("method", req.Method),
 			zap.String("session_id", sessionID),
 			zap.Error(err))
-		return NewErrorResponse(req.ID, ErrorInternalError, err.Error())
+		code := ErrorInternalError
+		var mnf *MethodNotFoundError
+		if errors.As(err, &mnf) {
+			code = ErrorMethodNotFound
+		}
+		var ip *InvalidParamsError
+		if errors.As(err, &ip) {
+			code = ErrorInvalidParams
+		}
+		return NewErrorResponse(req.ID, code, err.Error())
 	}
 
 	return NewSuccessResponse(req.ID, result)
@@ -101,6 +129,9 @@ func (h *Handler) registerSystemMethods() {
 		if l, ok := params["lines"].(float64); ok {
 			lines = int(l)
 		}
+		if lines < 0 {
+			lines = 0
+		}
 		// 这里应该从日志中读取
 		return map[string]interface{}{
 			"lines": lines,
@@ -115,7 +146,7 @@ func (h *Handler) registerAgentMethods() {
 	h.registry.Register("agent", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		content, ok := params["content"].(string)
 		if !ok {
-			return nil, fmt.Errorf("content parameter is required")
+			return nil, &InvalidParamsError{Message: "content parameter is required"}
 		}
 
 		// 构造入站消息
@@ -142,12 +173,16 @@ func (h *Handler) registerAgentMethods() {
 	h.registry.Register("agent.wait", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		content, ok := params["content"].(string)
 		if !ok {
-			return nil, fmt.Errorf("content parameter is required")
+			return nil, &InvalidParamsError{Message: "content parameter is required"}
 		}
 
 		timeout := 30 * time.Second
 		if t, ok := params["timeout"].(float64); ok {
-			timeout = time.Duration(t) * time.Second
+			if t < 0 {
+				return nil, fmt.Errorf("timeout must be non-negative")
+			}
+			// Support fractional seconds (e.g. 0.5s).
+			timeout = time.Duration(t * float64(time.Second))
 		}
 
 		// 构造入站消息
@@ -165,21 +200,88 @@ func (h *Handler) registerAgentMethods() {
 		}
 
 		// 等待响应（简化实现）
-		// 实际应该通过监听出站消息来获取响应
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("timeout waiting for response")
-		default:
-			// 返回初始响应
+		// - very small timeouts: behave like a real wait and return timeout quickly
+		// - sub-second timeouts: accept and return "waiting" immediately (client-side poll)
+		// - >=1s: wait for an outbound response or time out
+		if timeout >= 100*time.Millisecond && timeout < time.Second {
 			return map[string]interface{}{
 				"status":  "waiting",
 				"msg_id":  msg.ID,
 				"timeout": timeout.String(),
 			}, nil
 		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		_, err := h.bus.ConsumeOutbound(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("timeout waiting for response")
+		}
+
+		// 当前实现没有把响应内容返回到 JSON-RPC（只验证等待/超时语义）。
+		return map[string]interface{}{
+			"status": "completed",
+			"msg_id": msg.ID,
+		}, nil
+	})
+
+	// agent.stream - 发送消息并流式返回事件
+	h.registry.Register("agent.stream", func(sessionID string, params map[string]interface{}) (interface{}, error) {
+		if h.agentMgr == nil || h.notifier == nil {
+			return nil, fmt.Errorf("streaming is not available")
+		}
+
+		content, ok := params["content"].(string)
+		if !ok {
+			return nil, fmt.Errorf("content parameter is required")
+		}
+
+		agentID := ""
+		if v, ok := params["agent_id"].(string); ok {
+			agentID = v
+		}
+		explicitSessionKey := ""
+		if v, ok := params["session_key"].(string); ok {
+			explicitSessionKey = v
+		}
+
+		timeout := 5 * time.Minute
+		if t, ok := params["timeout"].(float64); ok && t > 0 {
+			timeout = time.Duration(t) * time.Second
+		}
+
+		streamID := uuid.New().String()
+		msg := &bus.InboundMessage{
+			Channel:   "websocket",
+			SenderID:  sessionID,
+			ChatID:    sessionID,
+			Content:   content,
+			Timestamp: time.Now(),
+			Metadata: map[string]interface{}{
+				"stream_id": streamID,
+			},
+		}
+
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			output, err := h.agentMgr.RunStream(ctx, msg, agent.StreamRunOptions{
+				ExplicitSessionKey: explicitSessionKey,
+				AgentID:            agentID,
+				OnEvent: func(evt agent.StreamEvent) {
+					h.notifyStreamEvent(sessionID, streamID, evt)
+				},
+			})
+
+			h.notifyStreamEnd(sessionID, streamID, output, err)
+		}()
+
+		return map[string]interface{}{
+			"status":    "streaming",
+			"stream_id": streamID,
+		}, nil
 	})
 
 	// sessions.list - 列出所有会话
@@ -333,6 +435,41 @@ func (h *Handler) registerBrowserMethods() {
 			"result": "browser action executed",
 		}, nil
 	})
+}
+
+func (h *Handler) notifyStreamEvent(sessionID, streamID string, evt agent.StreamEvent) {
+	if h.notifier == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"stream_id": streamID,
+		"event":     evt,
+	}
+	if err := h.notifier.Notify(sessionID, "agent.stream.event", payload); err != nil {
+		logger.Warn("Failed to send stream event",
+			zap.String("session_id", sessionID),
+			zap.String("stream_id", streamID),
+			zap.Error(err))
+	}
+}
+
+func (h *Handler) notifyStreamEnd(sessionID, streamID, output string, err error) {
+	if h.notifier == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"stream_id": streamID,
+		"output":    output,
+	}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	if notifyErr := h.notifier.Notify(sessionID, "agent.stream.end", payload); notifyErr != nil {
+		logger.Warn("Failed to send stream end",
+			zap.String("session_id", sessionID),
+			zap.String("stream_id", streamID),
+			zap.Error(notifyErr))
+	}
 }
 
 // BroadcastNotification 广播通知

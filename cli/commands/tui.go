@@ -17,7 +17,6 @@ import (
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/cli/input"
 	"github.com/smallnest/goclaw/config"
-	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/session"
@@ -61,11 +60,6 @@ func TUICommand() *cobra.Command {
 
 // runTUI runs the terminal UI
 func runTUI(cmd *cobra.Command, args []string) {
-	// 确保内置技能被复制到用户目录
-	if err := internal.EnsureBuiltinSkills(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to ensure builtin skills: %v\n", err)
-	}
-
 	// Load configuration
 	cfg, err := config.Load("")
 	if err != nil {
@@ -150,10 +144,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		_ = toolRegistry.RegisterExisting(tool)
 	}
 
-	// Register use_skill tool
-	_ = toolRegistry.RegisterExisting(tools.NewUseSkillTool())
-
-	// Register skills + MCP management tools (conversation-accessible)
+	// Register MCP management tools (conversation-accessible)
 	skillsRoleDir := "skills"
 	if sub := cfg.Agents.Defaults.Subagents; sub != nil {
 		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
@@ -161,11 +152,6 @@ func runTUI(cmd *cobra.Command, args []string) {
 		}
 	}
 	for _, tool := range []tools.Tool{
-		tools.NewSkillsListTool(workspace, skillsRoleDir),
-		tools.NewSkillsGetTool(workspace, skillsRoleDir),
-		tools.NewSkillsPutTool(workspace, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsDeleteTool(workspace, skillsRoleDir, invalidateRuntime),
-		tools.NewSkillsSetEnabledTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPListTool(workspace, skillsRoleDir),
 		tools.NewMCPPutServerTool(workspace, skillsRoleDir, invalidateRuntime),
 		tools.NewMCPDeleteServerTool(workspace, skillsRoleDir, invalidateRuntime),
@@ -216,19 +202,6 @@ func runTUI(cmd *cobra.Command, args []string) {
 		)
 		for _, tool := range browserTool.GetTools() {
 			_ = toolRegistry.RegisterExisting(tool)
-		}
-	}
-
-	// Create skills loader（统一使用 ~/.goclaw/skills 目录）
-	goclawDir := filepath.Join(homeDir, ".goclaw")
-	skillsDir := filepath.Join(goclawDir, "skills")
-	skillsLoader := agent.NewSkillsLoader(goclawDir, []string{skillsDir})
-	if err := skillsLoader.Discover(); err != nil {
-		logger.Warn("Failed to discover skills", zap.Error(err))
-	} else {
-		skills := skillsLoader.List()
-		if len(skills) > 0 {
-			logger.Info("Skills loaded", zap.Int("count", len(skills)))
 		}
 	}
 
@@ -317,32 +290,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 	})
 
 	cmdRegistry.SetSkillsGetter(func() ([]*SkillInfo, error) {
-		// 从 skillsLoader 获取技能信息
-		agentSkills := skillsLoader.List()
-		result := make([]*SkillInfo, 0, len(agentSkills))
-		for _, skill := range agentSkills {
-			skillInfo := &SkillInfo{
-				Name:        skill.Name,
-				Description: skill.Description,
-				Version:     skill.Version,
-				Author:      skill.Author,
-				Homepage:    skill.Homepage,
-				Always:      skill.Always,
-				Emoji:       skill.Metadata.OpenClaw.Emoji,
-			}
-			// 转换缺失依赖信息
-			if skill.MissingDeps != nil {
-				skillInfo.MissingDeps = &MissingDepsInfo{
-					Bins:       skill.MissingDeps.Bins,
-					AnyBins:    skill.MissingDeps.AnyBins,
-					Env:        skill.MissingDeps.Env,
-					PythonPkgs: skill.MissingDeps.PythonPkgs,
-					NodePkgs:   skill.MissingDeps.NodePkgs,
-				}
-			}
-			result = append(result, skillInfo)
-		}
-		return result, nil
+		return []*SkillInfo{}, nil
 	})
 
 	// Handle message flag
@@ -357,16 +305,19 @@ func runTUI(cmd *cobra.Command, args []string) {
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 		defer msgCancel()
 
-		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager)
+		response, streamed, runWorkspace, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager, workspace)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		} else {
-			fmt.Println("\n" + response + "\n")
+			if !streamed {
+				fmt.Println("\n" + response + "\n")
+			}
 			sess.AddMessage(session.Message{
 				Role:    "assistant",
 				Content: response,
 			})
 			_ = sessionMgr.Save(sess)
+			_ = agent.CompareSessionHistory(cfg, sess, runWorkspace)
 			exportSessionMarkdown(cfg, sessionMgr, sess)
 		}
 
@@ -441,18 +392,21 @@ func runTUI(cmd *cobra.Command, args []string) {
 		timeout := time.Duration(tuiTimeoutMs) * time.Millisecond
 		msgCtx, msgCancel := context.WithTimeout(ctx, timeout)
 
-		response, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager)
+		response, streamed, runWorkspace, err := runAgentIteration(msgCtx, sess, mainRuntime, toolRegistry, cmdRegistry, agentManager, workspace)
 		msgCancel()
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		} else {
-			fmt.Println("\n" + response + "\n")
+			if !streamed {
+				fmt.Println("\n" + response + "\n")
+			}
 			sess.AddMessage(session.Message{
 				Role:    "assistant",
 				Content: response,
 			})
 			_ = sessionMgr.Save(sess)
+			_ = agent.CompareSessionHistory(cfg, sess, runWorkspace)
 			exportSessionMarkdown(cfg, sessionMgr, sess)
 		}
 
@@ -469,15 +423,16 @@ func runAgentIteration(
 	toolRegistry *agent.ToolRegistry,
 	cmdRegistry *CommandRegistry,
 	agentManager *agent.AgentManager,
-) (string, error) {
+	defaultWorkspace string,
+) (string, bool, string, error) {
 	if cmdRegistry != nil && cmdRegistry.IsStopped() {
-		return "", nil
+		return "", false, "", nil
 	}
 	if mainRuntime == nil {
-		return "", fmt.Errorf("main runtime is not initialized")
+		return "", false, "", fmt.Errorf("main runtime is not initialized")
 	}
 	if sess == nil {
-		return "", fmt.Errorf("session is nil")
+		return "", false, "", fmt.Errorf("session is nil")
 	}
 	if len(toolRegistry.ListExisting()) == 0 {
 		logger.Warn("No tools registered for TUI main runtime")
@@ -489,12 +444,15 @@ func runAgentIteration(
 		prompt = strings.TrimSpace(history[len(history)-1].Content)
 	}
 	if prompt == "" {
-		return "", nil
+		return "", false, "", nil
 	}
 
 	runAgentID := "default"
 	runSystemPrompt := ""
-	runWorkspace := ""
+	runWorkspace := strings.TrimSpace(defaultWorkspace)
+	if runWorkspace == "" {
+		runWorkspace = "."
+	}
 
 	if agentManager != nil {
 		selectedAgent, ok := agentManager.GetAgent(runAgentID)
@@ -523,6 +481,38 @@ func runAgentIteration(
 	runCtx = context.WithValue(runCtx, agentruntime.CtxAccountID, accountID)
 	runCtx = context.WithValue(runCtx, agentruntime.CtxChatID, chatID)
 
+	if streamer, ok := mainRuntime.(agent.MainRuntimeStreamer); ok {
+		stream, err := streamer.RunStream(runCtx, agent.MainRunRequest{
+			AgentID:      runAgentID,
+			SessionKey:   sess.Key,
+			Prompt:       prompt,
+			SystemPrompt: runSystemPrompt,
+			Workspace:    runWorkspace,
+			Metadata: map[string]any{
+				"channel":    channel,
+				"account_id": accountID,
+				"chat_id":    chatID,
+			},
+		})
+		if err != nil {
+			return "", false, runWorkspace, err
+		}
+		fmt.Print("\n")
+		output, err := agent.CollectStreamOutput(stream, func(evt agent.StreamEvent) {
+			if delta := agent.ExtractTextDelta(evt); delta != "" {
+				fmt.Print(delta)
+			}
+		})
+		fmt.Print("\n\n")
+		if err != nil {
+			return "", true, runWorkspace, err
+		}
+		if strings.TrimSpace(output) == "" {
+			output = "(no output)"
+		}
+		return output, true, runWorkspace, nil
+	}
+
 	resp, err := mainRuntime.Run(runCtx, agent.MainRunRequest{
 		AgentID:      runAgentID,
 		SessionKey:   sess.Key,
@@ -536,12 +526,12 @@ func runAgentIteration(
 		},
 	})
 	if err != nil {
-		return "", err
+		return "", false, runWorkspace, err
 	}
 	if resp == nil {
-		return "", nil
+		return "", false, runWorkspace, nil
 	}
-	return strings.TrimSpace(resp.Output), nil
+	return strings.TrimSpace(resp.Output), false, runWorkspace, nil
 }
 
 // getLoadedSkills from session

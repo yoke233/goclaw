@@ -100,6 +100,10 @@ func (m *MemoryManager) AddMemoryBatch(ctx context.Context, items []MemoryItem) 
 	default:
 	}
 
+	if len(items) == 0 {
+		return nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -114,10 +118,16 @@ func (m *MemoryManager) AddMemoryBatch(ctx context.Context, items []MemoryItem) 
 	if err != nil {
 		return fmt.Errorf("failed to generate embeddings: %w", err)
 	}
+	if len(embeddings) != len(items) {
+		return fmt.Errorf("embedding count mismatch: got %d embeddings for %d items", len(embeddings), len(items))
+	}
 
 	// Create VectorEmbedding objects
 	ves := make([]*VectorEmbedding, len(items))
 	for i, item := range items {
+		if embeddings[i] == nil {
+			return fmt.Errorf("embedding %d is nil", i)
+		}
 		ves[i] = &VectorEmbedding{
 			Vector:    embeddings[i],
 			Dimension: len(embeddings[i]),

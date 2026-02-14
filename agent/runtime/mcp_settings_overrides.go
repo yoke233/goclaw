@@ -10,7 +10,7 @@ import (
 	"github.com/smallnest/goclaw/extensions"
 )
 
-func buildSubagentSDKSettingsOverrides(req SubagentRunRequest) (*sdkconfig.Settings, []string) {
+func buildSubagentSDKSettingsOverrides(req SubagentRunRequest, pluginCfg *extensions.AgentsConfig) (*sdkconfig.Settings, []string) {
 	// Always disable agentsdk-go on-disk history for subagent runs. Subagents
 	// often run inside real repos (repodir), so we avoid writing .claude/history.
 	cleanupPeriodDays := 0
@@ -36,7 +36,8 @@ func buildSubagentSDKSettingsOverrides(req SubagentRunRequest) (*sdkconfig.Setti
 
 	baseCfg, baseWarnings := loadAgentsConfigFromRoot(baseRoot)
 	repoCfg, repoWarnings := loadAgentsConfigFromRoot(repoRoot)
-	merged := extensions.MergeAgentsConfig(baseCfg, repoCfg)
+	merged := extensions.MergeAgentsConfig(pluginCfg, baseCfg)
+	merged = extensions.MergeAgentsConfig(merged, repoCfg)
 	mcp, mcpWarnings := buildSDKMCPOverridesFromAgentsConfig(merged)
 	overrides.MCP = mcp
 
@@ -51,6 +52,17 @@ func buildSDKMCPOverridesFromExplicitPath(cfgPath string) (*sdkconfig.MCPConfig,
 	cfgPath = strings.TrimSpace(cfgPath)
 	if cfgPath == "" {
 		return nil, []string{"explicit config path is empty"}
+	}
+
+	stat, err := os.Stat(cfgPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, []string{fmt.Sprintf("explicit mcp config path does not exist: %s", cfgPath)}
+		}
+		return nil, []string{fmt.Sprintf("stat explicit mcp config path %s: %v", cfgPath, err)}
+	}
+	if stat.IsDir() {
+		return nil, []string{fmt.Sprintf("explicit mcp config path is a directory: %s", cfgPath)}
 	}
 
 	// Prefer TOML (.agents/config.toml). Fallback to legacy JSON mcp.json.
@@ -197,7 +209,9 @@ func buildSDKMCPOverridesFromAgentsConfig(cfg *extensions.AgentsConfig) (*sdkcon
 				if headers == nil {
 					headers = map[string]string{}
 				}
-				if _, exists := headers["Authorization"]; !exists {
+				// Avoid injecting a duplicate Authorization header when a case-insensitive
+				// equivalent already exists (e.g. "authorization").
+				if !hasHeaderKeyCI(headers, "authorization") {
 					headers["Authorization"] = "Bearer " + token
 				}
 			}
@@ -220,8 +234,8 @@ func buildSDKMCPOverridesFromAgentsConfig(cfg *extensions.AgentsConfig) (*sdkcon
 			Env:                cloneStringMap(server.Env),
 			Headers:            headers,
 			TimeoutSeconds:     timeoutSeconds,
-			EnabledTools:       append([]string(nil), server.EnabledTools...),
-			DisabledTools:      append([]string(nil), server.DisabledTools...),
+			EnabledTools:       normalizeToolFilters(server.EnabledTools),
+			DisabledTools:      normalizeToolFilters(server.DisabledTools),
 			ToolTimeoutSeconds: toolTimeoutSeconds,
 		}
 	}
@@ -248,6 +262,41 @@ func cloneStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+func hasHeaderKeyCI(headers map[string]string, want string) bool {
+	if len(headers) == 0 || strings.TrimSpace(want) == "" {
+		return false
+	}
+	for k := range headers {
+		if strings.EqualFold(k, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeToolFilters(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, entry := range in {
+		tool := strings.TrimSpace(entry)
+		if tool == "" {
+			continue
+		}
+		if _, ok := seen[tool]; ok {
+			continue
+		}
+		seen[tool] = struct{}{}
+		out = append(out, tool)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

@@ -259,20 +259,37 @@ func toString(v interface{}) string {
 
 // Contains checks if a key exists in the cache
 func (c *Cache) Contains(key string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	_, ok := c.sessions[key]
-	return ok
+	cached, ok := c.sessions[key]
+	if !ok {
+		return false
+	}
+
+	// Treat expired entries as non-existent and eagerly remove them.
+	if time.Now().After(cached.ExpiresAt) {
+		c.remove(key)
+		c.stats.Expirations++
+		return false
+	}
+
+	return true
 }
 
 // Keys returns all keys in the cache
 func (c *Cache) Keys() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	now := time.Now()
 	keys := make([]string, 0, len(c.sessions))
-	for k := range c.sessions {
+	for k, cached := range c.sessions {
+		if now.After(cached.ExpiresAt) {
+			c.remove(k)
+			c.stats.Expirations++
+			continue
+		}
 		keys = append(keys, k)
 	}
 	return keys

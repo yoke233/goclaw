@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -19,15 +20,19 @@ type MessageBus struct {
 	mu            sync.RWMutex
 	closed        bool
 	fanoutStopped bool
+	closeCh       chan struct{}
+	subNotify     chan struct{}
 }
 
 // NewMessageBus 创建消息总线
 func NewMessageBus(bufferSize int) *MessageBus {
 	b := &MessageBus{
-		inbound:  make(chan *InboundMessage, bufferSize),
-		outbound: make(chan *OutboundMessage, bufferSize),
-		outSubs:  make(map[string]chan *OutboundMessage),
-		closed:   false,
+		inbound:   make(chan *InboundMessage, bufferSize),
+		outbound:  make(chan *OutboundMessage, bufferSize),
+		outSubs:   make(map[string]chan *OutboundMessage),
+		closed:    false,
+		closeCh:   make(chan struct{}),
+		subNotify: make(chan struct{}, 1),
 	}
 	// 启动广播 goroutine
 	go b.fanoutMessages()
@@ -36,12 +41,18 @@ func NewMessageBus(bufferSize int) *MessageBus {
 
 // PublishInbound 发布入站消息
 func (b *MessageBus) PublishInbound(ctx context.Context, msg *InboundMessage) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	if msg == nil {
+		return fmt.Errorf("inbound message is nil")
+	}
 
+	b.mu.RLock()
 	if b.closed {
+		b.mu.RUnlock()
 		return ErrBusClosed
 	}
+	inbound := b.inbound
+	closeCh := b.closeCh
+	b.mu.RUnlock()
 
 	// 设置ID和时间戳
 	if msg.ID == "" {
@@ -52,8 +63,10 @@ func (b *MessageBus) PublishInbound(ctx context.Context, msg *InboundMessage) er
 	}
 
 	select {
-	case b.inbound <- msg:
+	case inbound <- msg:
 		return nil
+	case <-closeCh:
+		return ErrBusClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -62,19 +75,20 @@ func (b *MessageBus) PublishInbound(ctx context.Context, msg *InboundMessage) er
 // ConsumeInbound 消费入站消息
 func (b *MessageBus) ConsumeInbound(ctx context.Context) (*InboundMessage, error) {
 	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, ErrBusClosed
-	}
+	closed := b.closed
 	inbound := b.inbound
+	closeCh := b.closeCh
 	b.mu.RUnlock()
 
+	if closed {
+		return nil, ErrBusClosed
+	}
+
 	select {
-	case msg, ok := <-inbound:
-		if !ok {
-			return nil, ErrBusClosed
-		}
+	case msg := <-inbound:
 		return msg, nil
+	case <-closeCh:
+		return nil, ErrBusClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -82,13 +96,19 @@ func (b *MessageBus) ConsumeInbound(ctx context.Context) (*InboundMessage, error
 
 // PublishOutbound 发布出站消息
 func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	if msg == nil {
+		return fmt.Errorf("outbound message is nil")
+	}
 
+	b.mu.RLock()
 	if b.closed {
+		b.mu.RUnlock()
 		logger.Warn("Message bus is closed, cannot publish outbound")
 		return ErrBusClosed
 	}
+	outbound := b.outbound
+	closeCh := b.closeCh
+	b.mu.RUnlock()
 
 	// 设置ID和时间戳
 	if msg.ID == "" {
@@ -106,11 +126,13 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 		zap.Int("outbound_queue_size", len(b.outbound)))
 
 	select {
-	case b.outbound <- msg:
+	case outbound <- msg:
 		logger.Info("Outbound message published successfully",
 			zap.String("id", msg.ID),
 			zap.Int("outbound_queue_size", len(b.outbound)))
 		return nil
+	case <-closeCh:
+		return ErrBusClosed
 	case <-ctx.Done():
 		logger.Warn("PublishOutbound context cancelled",
 			zap.String("id", msg.ID))
@@ -122,9 +144,11 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 // 使用订阅机制，确保消息能够被正确接收
 func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, error) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+	closed := b.closed
+	closeCh := b.closeCh
+	b.mu.RUnlock()
 
-	if b.closed {
+	if closed {
 		logger.Warn("Message bus is closed, cannot consume outbound")
 		return nil, ErrBusClosed
 	}
@@ -135,13 +159,18 @@ func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, err
 
 	// 等待消息
 	select {
-	case msg := <-sub.Channel:
+	case msg, ok := <-sub.Channel:
+		if !ok {
+			return nil, ErrBusClosed
+		}
 		logger.Debug("Outbound message consumed from bus",
 			zap.String("id", msg.ID),
 			zap.String("channel", msg.Channel),
 			zap.String("chat_id", msg.ChatID),
 			zap.Int("content_length", len(msg.Content)))
 		return msg, nil
+	case <-closeCh:
+		return nil, ErrBusClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -157,6 +186,7 @@ func (b *MessageBus) Close() error {
 	}
 
 	b.closed = true
+	close(b.closeCh)
 
 	// 关闭所有订阅者的 channel
 	b.outSubsMu.Lock()
@@ -168,9 +198,6 @@ func (b *MessageBus) Close() error {
 		delete(b.outSubs, k)
 	}
 	b.outSubsMu.Unlock()
-
-	close(b.inbound)
-	close(b.outbound)
 
 	return nil
 }
@@ -211,16 +238,35 @@ func (s *OutboundSubscription) Unsubscribe() {
 // 使用内部订阅机制，每个订阅者有独立的 channel
 // 返回一个 OutboundSubscription 对象，包含只读 channel 和取消订阅方法
 func (b *MessageBus) SubscribeOutbound() *OutboundSubscription {
-	b.outSubsMu.Lock()
-	defer b.outSubsMu.Unlock()
+	b.mu.RLock()
+	closed := b.closed
+	b.mu.RUnlock()
 
+	if closed {
+		ch := make(chan *OutboundMessage)
+		close(ch)
+		return &OutboundSubscription{
+			ID:      "",
+			Channel: ch,
+			bus:     nil,
+		}
+	}
+
+	b.outSubsMu.Lock()
 	subID := uuid.New().String()
 	ch := make(chan *OutboundMessage, 100) // 每个订阅者有独立的缓冲
 	b.outSubs[subID] = ch
+	b.outSubsMu.Unlock()
 
 	logger.Info("New outbound subscriber",
 		zap.String("subscription_id", subID),
 		zap.Int("total_subscribers", len(b.outSubs)))
+
+	// Notify fanout goroutine that a subscriber exists (non-blocking).
+	select {
+	case b.subNotify <- struct{}{}:
+	default:
+	}
 
 	return &OutboundSubscription{
 		ID:      subID,
@@ -250,7 +296,33 @@ func (b *MessageBus) UnsubscribeOutbound(subID string) {
 func (b *MessageBus) fanoutMessages() {
 	logger.Info("Outbound fanout started, waiting for messages...")
 
-	for msg := range b.outbound {
+	for {
+		// Wait until at least one subscriber exists, so outbound messages are not dropped
+		// when published before any subscriber is created.
+		for {
+			b.outSubsMu.RLock()
+			hasSubs := len(b.outSubs) > 0
+			b.outSubsMu.RUnlock()
+			if hasSubs {
+				break
+			}
+			select {
+			case <-b.subNotify:
+			case <-b.closeCh:
+				goto stopped
+			}
+		}
+
+		var msg *OutboundMessage
+		select {
+		case msg = <-b.outbound:
+		case <-b.closeCh:
+			goto stopped
+		}
+		if msg == nil {
+			continue
+		}
+
 		b.outSubsMu.RLock()
 		subCount := len(b.outSubs)
 		b.outSubsMu.RUnlock()
@@ -260,7 +332,13 @@ func (b *MessageBus) fanoutMessages() {
 			zap.Int("msg_content_length", len(msg.Content)))
 
 		if subCount == 0 {
-			logger.Warn("No subscribers for outbound message, dropping it")
+			// Subscriber set changed; keep the message queued by pushing it back.
+			// Best-effort: if the queue is full, we drop with a warning.
+			select {
+			case b.outbound <- msg:
+			default:
+				logger.Warn("No subscribers for outbound message, dropping it")
+			}
 			continue
 		}
 
@@ -287,6 +365,7 @@ func (b *MessageBus) fanoutMessages() {
 			zap.Int("total_subscribers", subCount))
 	}
 
+stopped:
 	b.mu.Lock()
 	b.fanoutStopped = true
 	b.mu.Unlock()

@@ -69,6 +69,9 @@ func NewReadline(prompt string) (*readline.Instance, error) {
 
 // InitReadlineHistory 初始化 readline 实例的历史记录
 func InitReadlineHistory(rl *readline.Instance, history []string) {
+	if rl == nil {
+		return
+	}
 	for _, h := range history {
 		if h != "" {
 			_ = rl.SaveHistory(h)

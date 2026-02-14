@@ -72,6 +72,13 @@ type BindingEntry struct {
 	Agent     *Agent
 }
 
+// StreamRunOptions controls streaming execution behavior.
+type StreamRunOptions struct {
+	ExplicitSessionKey string
+	AgentID            string
+	OnEvent            func(StreamEvent)
+}
+
 // NewAgentManagerConfig AgentManager 配置
 type NewAgentManagerConfig struct {
 	Bus             *bus.MessageBus
@@ -804,12 +811,13 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		})
 	}
 
+	runWorkspace := agent.GetWorkspace()
 	runResp, runErr := m.mainRuntime.Run(ctx, MainRunRequest{
 		AgentID:      strings.TrimSpace(agentID),
 		SessionKey:   sessionKey,
 		Prompt:       msg.Content,
 		SystemPrompt: agent.GetState().SystemPrompt,
-		Workspace:    agent.GetWorkspace(),
+		Workspace:    runWorkspace,
 		Media:        media,
 		Metadata: map[string]any{
 			"channel":    msg.Channel,
@@ -840,7 +848,7 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	}
 
 	// 更新会话
-	m.updateSession(sess, finalMessages)
+	m.updateSession(sess, finalMessages, runWorkspace)
 
 	// 发布响应
 	if len(finalMessages) > 0 {
@@ -853,8 +861,154 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	return nil
 }
 
+// RunStream executes a single inbound message with streaming events.
+func (m *AgentManager) RunStream(ctx context.Context, msg *bus.InboundMessage, opts StreamRunOptions) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("agent manager is nil")
+	}
+	if msg == nil {
+		return "", fmt.Errorf("inbound message is nil")
+	}
+	if m.sessionMgr == nil {
+		return "", fmt.Errorf("session manager is not configured")
+	}
+	if m.mainRuntime == nil {
+		return "", fmt.Errorf("main runtime is not configured")
+	}
+
+	agentID := strings.TrimSpace(opts.AgentID)
+	var agent *Agent
+
+	m.mu.RLock()
+	if agentID != "" {
+		if a, ok := m.agents[agentID]; ok {
+			agent = a
+		}
+	} else {
+		bindingKey := fmt.Sprintf("%s:%s", msg.Channel, msg.AccountID)
+		if entry, ok := m.bindings[bindingKey]; ok {
+			agent = entry.Agent
+			agentID = entry.AgentID
+		} else if m.defaultAgent != nil {
+			agent = m.defaultAgent
+			for id, a := range m.agents {
+				if a == agent {
+					agentID = id
+					break
+				}
+			}
+			if agentID == "" {
+				agentID = "default"
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	if agent == nil {
+		return "", fmt.Errorf("no agent found for stream request")
+	}
+
+	sessionKey, fresh := ResolveSessionKey(SessionKeyOptions{
+		Explicit:       opts.ExplicitSessionKey,
+		Channel:        msg.Channel,
+		AccountID:      msg.AccountID,
+		ChatID:         msg.ChatID,
+		FreshOnDefault: true,
+		Now:            msg.Timestamp,
+	})
+	if fresh {
+		logger.Info("Creating fresh session", zap.String("session_key", sessionKey))
+	}
+
+	sess, err := m.sessionMgr.GetOrCreate(sessionKey)
+	if err != nil {
+		logger.Error("Failed to get session", zap.Error(err))
+		return "", err
+	}
+
+	agentMsg := AgentMessage{
+		Role:      RoleUser,
+		Content:   []ContentBlock{TextContent{Text: msg.Content}},
+		Timestamp: msg.Timestamp.UnixMilli(),
+	}
+	for _, media := range msg.Media {
+		if media.Type == "image" {
+			agentMsg.Content = append(agentMsg.Content, ImageContent{
+				URL:      media.URL,
+				Data:     media.Base64,
+				MimeType: media.MimeType,
+			})
+		}
+	}
+
+	ctx = context.WithValue(ctx, agentruntime.CtxSessionKey, sessionKey)
+	ctx = context.WithValue(ctx, agentruntime.CtxAgentID, strings.TrimSpace(agentID))
+	ctx = context.WithValue(ctx, agentruntime.CtxChannel, strings.TrimSpace(msg.Channel))
+	ctx = context.WithValue(ctx, agentruntime.CtxAccountID, strings.TrimSpace(msg.AccountID))
+	ctx = context.WithValue(ctx, agentruntime.CtxChatID, strings.TrimSpace(msg.ChatID))
+
+	media := make([]MainRunMedia, 0, len(msg.Media))
+	for _, item := range msg.Media {
+		media = append(media, MainRunMedia{
+			Type:     item.Type,
+			URL:      item.URL,
+			Base64:   item.Base64,
+			MimeType: item.MimeType,
+		})
+	}
+
+	streamer, ok := m.mainRuntime.(MainRuntimeStreamer)
+	if !ok {
+		return "", fmt.Errorf("main runtime does not support streaming")
+	}
+
+	runWorkspace := agent.GetWorkspace()
+	stream, err := streamer.RunStream(ctx, MainRunRequest{
+		AgentID:      strings.TrimSpace(agentID),
+		SessionKey:   sessionKey,
+		Prompt:       msg.Content,
+		SystemPrompt: agent.GetState().SystemPrompt,
+		Workspace:    runWorkspace,
+		Media:        media,
+		Metadata: map[string]any{
+			"channel":    msg.Channel,
+			"account_id": msg.AccountID,
+			"chat_id":    msg.ChatID,
+		},
+	})
+	if err != nil {
+		logger.Error("Main runtime streaming failed", zap.Error(err))
+		return "", err
+	}
+
+	output, runErr := CollectStreamOutput(stream, func(evt StreamEvent) {
+		if opts.OnEvent != nil {
+			opts.OnEvent(evt)
+		}
+	})
+	if runErr != nil {
+		logger.Error("Main runtime streaming error", zap.Error(runErr))
+		return "", runErr
+	}
+	if strings.TrimSpace(output) == "" {
+		output = "(no output)"
+	}
+
+	finalMessages := []AgentMessage{
+		agentMsg,
+		{
+			Role:      RoleAssistant,
+			Content:   []ContentBlock{TextContent{Text: output}},
+			Timestamp: time.Now().UnixMilli(),
+		},
+	}
+	m.updateSession(sess, finalMessages, runWorkspace)
+
+	return output, nil
+}
+
 // updateSession 更新会话
-func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMessage) {
+func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMessage, workspace string) {
 	for _, msg := range messages {
 		sessMsg := session.Message{
 			Role:      string(msg.Role),
@@ -885,6 +1039,8 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 		logger.Error("Failed to save session", zap.Error(err))
 		return
 	}
+
+	_ = CompareSessionHistory(m.cfg, sess, workspace)
 
 	m.exportSessionMarkdown(sess)
 }

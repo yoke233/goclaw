@@ -163,12 +163,23 @@ func (h *StreamHandler) handle(ctx context.Context) {
 
 // processChunk processes a streaming chunk
 func (h *StreamHandler) processChunk(msg *StreamMessage) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	// Copy callbacks and compute completion payload under lock, but invoke callbacks
+	// without holding the lock to allow re-entrant handler access (GetContent, etc.).
+	var (
+		onChunk    func(*StreamMessage)
+		onComplete func(string)
+		onError    func(error)
+		complete   string
+		errToSend  error
+	)
 
+	h.mu.Lock()
 	if msg.Error != "" {
-		if h.onError != nil {
-			h.onError(fmt.Errorf("stream error: %s", msg.Error))
+		onError = h.onError
+		errToSend = fmt.Errorf("stream error: %s", msg.Error)
+		h.mu.Unlock()
+		if onError != nil {
+			onError(errToSend)
 		}
 		return
 	}
@@ -183,14 +194,24 @@ func (h *StreamHandler) processChunk(msg *StreamMessage) {
 		h.content.WriteString(msg.Content)
 	}
 
-	if h.onChunk != nil {
-		h.onChunk(msg)
-	}
-
+	onChunk = h.onChunk
 	if msg.IsComplete {
-		if h.onComplete != nil {
-			h.onComplete(h.content.String())
+		onComplete = h.onComplete
+		// If a final stream was provided, it should be the completion payload; otherwise
+		// fall back to the accumulated non-final content.
+		if h.final.Len() > 0 {
+			complete = h.final.String()
+		} else {
+			complete = h.content.String()
 		}
+	}
+	h.mu.Unlock()
+
+	if onChunk != nil {
+		onChunk(msg)
+	}
+	if onComplete != nil {
+		onComplete(complete)
 	}
 }
 

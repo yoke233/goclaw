@@ -14,6 +14,7 @@ import (
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
 	sdkprompts "github.com/cexll/agentsdk-go/pkg/prompts"
+	"github.com/smallnest/goclaw/extensions"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -83,6 +84,13 @@ func (r *AgentsdkRuntime) SetPermissionDecider(decider PermissionDecider) {
 }
 
 func (r *AgentsdkRuntime) Spawn(ctx context.Context, req SubagentRunRequest) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	if strings.TrimSpace(req.RunID) == "" {
 		return "", fmt.Errorf("run id is required")
 	}
@@ -96,7 +104,7 @@ func (r *AgentsdkRuntime) Spawn(ctx context.Context, req SubagentRunRequest) (st
 		return "", fmt.Errorf("run already exists: %s", req.RunID)
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(ctx)
 	run := &subagentRun{
 		req:    req,
 		done:   make(chan struct{}),
@@ -189,7 +197,15 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		return
 	}
 
-	skillsRegs, hookRegs, warnings := buildSubagentSkillRegistrations(run.req)
+	pluginResult := extensions.LoadClaudePlugins(repoDir)
+	for _, w := range pluginResult.Warnings {
+		logger.Warn("Subagent plugin warning",
+			zap.String("run_id", runID),
+			zap.String("repodir", repoDir),
+			zap.String("warning", w))
+	}
+
+	skillsRegs, hookRegs, warnings := buildSubagentSkillRegistrations(run.req, pluginResult)
 	for _, warning := range warnings {
 		logger.Warn("Subagent skills warning",
 			zap.String("run_id", runID),
@@ -199,7 +215,7 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 			zap.String("warning", warning))
 	}
 
-	settingsOverrides, mcpWarnings := buildSubagentSDKSettingsOverrides(run.req)
+	settingsOverrides, mcpWarnings := buildSubagentSDKSettingsOverrides(run.req, pluginResult.MCP)
 	for _, w := range mcpWarnings {
 		logger.Warn("Subagent MCP warning",
 			zap.String("run_id", runID),

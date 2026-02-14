@@ -35,7 +35,7 @@ func TestBuildSubagentSDKSettingsOverrides_UsesGoClawDirWhenRoleDirInvalid(t *te
 		GoClawDir: goclawDir,
 		RoleDir:   filepath.Join(goclawDir, "missing-role-pack"),
 		RepoDir:   repoDir,
-	})
+	}, nil)
 	if settings == nil {
 		t.Fatalf("settings overrides is nil")
 	}
@@ -89,7 +89,7 @@ func TestBuildSubagentSDKSettingsOverrides_RoleDirIsolatesGoClawDir(t *testing.T
 		GoClawDir: goclawDir,
 		RoleDir:   roleDir,
 		RepoDir:   "",
-	})
+	}, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v, want empty", warnings)
 	}
@@ -126,7 +126,7 @@ func TestBuildSubagentSDKSettingsOverrides_RepoDirOverlaysBase(t *testing.T) {
 	settings, warnings := buildSubagentSDKSettingsOverrides(SubagentRunRequest{
 		GoClawDir: baseDir,
 		RepoDir:   repoDir,
-	})
+	}, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v, want empty", warnings)
 	}
@@ -163,7 +163,7 @@ func TestBuildSubagentSDKSettingsOverrides_RepoDirCanDisableBaseServer(t *testin
 	settings, warnings := buildSubagentSDKSettingsOverrides(SubagentRunRequest{
 		GoClawDir: baseDir,
 		RepoDir:   repoDir,
-	})
+	}, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v, want empty", warnings)
 	}
@@ -202,7 +202,7 @@ func TestBuildSubagentSDKSettingsOverrides_UsesExplicitConfigPath(t *testing.T) 
 		GoClawDir:     baseDir,
 		RepoDir:       repoDir,
 		MCPConfigPath: explicitPath,
-	})
+	}, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v, want empty", warnings)
 	}
@@ -214,6 +214,90 @@ func TestBuildSubagentSDKSettingsOverrides_UsesExplicitConfigPath(t *testing.T) 
 	}
 	if _, ok := settings.MCP.Servers["search"]; !ok {
 		t.Fatalf("explicit server missing")
+	}
+}
+
+func TestBuildSDKMCPOverridesFromAgentsConfigAuthorizationHeaderCaseInsensitive(t *testing.T) {
+	t.Setenv("TEST_MCP_TOKEN", "abc-token")
+
+	cfg := &extensions.AgentsConfig{
+		MCPServers: map[string]extensions.MCPServerConfig{
+			"search": {
+				Enabled:           boolPtr(true),
+				Type:              "http",
+				URL:               "https://example.com/mcp",
+				BearerTokenEnvVar: "TEST_MCP_TOKEN",
+				HTTPHeaders: map[string]string{
+					"authorization": "Bearer pre-existing",
+				},
+			},
+		},
+	}
+
+	mcp, warnings := buildSDKMCPOverridesFromAgentsConfig(cfg)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings=%v, want empty", warnings)
+	}
+	if mcp == nil {
+		t.Fatalf("mcp is nil")
+	}
+	server, ok := mcp.Servers["search"]
+	if !ok {
+		t.Fatalf("server search missing")
+	}
+	if got := server.Headers["authorization"]; got != "Bearer pre-existing" {
+		t.Fatalf("authorization header=%q, want pre-existing token", got)
+	}
+	if _, exists := server.Headers["Authorization"]; exists {
+		t.Fatalf("should not inject duplicate Authorization header when case-insensitive equivalent exists")
+	}
+}
+
+func TestBuildSDKMCPOverridesFromAgentsConfigNormalizesToolFilters(t *testing.T) {
+	cfg := &extensions.AgentsConfig{
+		MCPServers: map[string]extensions.MCPServerConfig{
+			"time": {
+				Enabled:       boolPtr(true),
+				Type:          "stdio",
+				Command:       "uvx",
+				EnabledTools:  []string{"  fetch  ", "", "search"},
+				DisabledTools: []string{"  ", " write "},
+			},
+		},
+	}
+
+	mcp, warnings := buildSDKMCPOverridesFromAgentsConfig(cfg)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings=%v, want empty", warnings)
+	}
+	if mcp == nil {
+		t.Fatalf("mcp is nil")
+	}
+	server, ok := mcp.Servers["time"]
+	if !ok {
+		t.Fatalf("server time missing")
+	}
+
+	if len(server.EnabledTools) != 2 || server.EnabledTools[0] != "fetch" || server.EnabledTools[1] != "search" {
+		t.Fatalf("EnabledTools=%v, want [fetch search]", server.EnabledTools)
+	}
+	if len(server.DisabledTools) != 1 || server.DisabledTools[0] != "write" {
+		t.Fatalf("DisabledTools=%v, want [write]", server.DisabledTools)
+	}
+}
+
+func TestBuildSubagentSDKSettingsOverrides_ExplicitMissingPathShouldWarn(t *testing.T) {
+	explicitPath := filepath.Join(t.TempDir(), "missing.toml")
+
+	settings, warnings := buildSubagentSDKSettingsOverrides(SubagentRunRequest{
+		MCPConfigPath: explicitPath,
+	}, nil)
+
+	if settings == nil {
+		t.Fatalf("settings overrides is nil")
+	}
+	if len(warnings) == 0 {
+		t.Fatalf("expected warning for missing explicit MCP config path")
 	}
 }
 

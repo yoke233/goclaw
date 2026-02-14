@@ -321,15 +321,17 @@ func (p *ToolPolicy) IsToolAllowed(toolName string) bool {
 // WaitForSubagentCompletion 等待分身完成
 func WaitForSubagentCompletion(runID string, timeoutSeconds int, waitFunc func(string, int) (*SubagentCompletion, error)) (*SubagentCompletion, error) {
 	timeout := time.Duration(timeoutSeconds) * time.Second
+	effectiveTimeoutSeconds := timeoutSeconds
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
+		effectiveTimeoutSeconds = int(timeout.Seconds())
 	}
 
 	done := make(chan *SubagentCompletion, 1)
 	errChan := make(chan error, 1)
 
 	go func() {
-		result, err := waitFunc(runID, timeoutSeconds)
+		result, err := waitFunc(runID, effectiveTimeoutSeconds)
 		if err != nil {
 			errChan <- err
 			return

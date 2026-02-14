@@ -320,12 +320,23 @@ func (m *QMDManager) Close() error {
 
 // expandHomeDir 扩展 ~ 为用户主目录
 func expandHomeDir(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, err := config.ResolveUserHomeDir()
-		if err == nil {
-			return filepath.Join(home, path[2:])
-		}
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return path
 	}
+
+	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") || strings.HasPrefix(trimmed, "~\\") {
+		home, err := config.ResolveUserHomeDir()
+		if err != nil {
+			return path
+		}
+		rest := strings.TrimLeft(trimmed[1:], "/\\")
+		if rest == "" {
+			return filepath.Clean(home)
+		}
+		return filepath.Join(home, filepath.FromSlash(rest))
+	}
+
 	return path
 }
 
@@ -342,8 +353,16 @@ func sortResultsByScore(results []QMDQueryResult) {
 
 // truncateSnippet 截断片段并添加省略号
 func truncateSnippet(snippet string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(snippet) <= maxLen {
 		return snippet
+	}
+
+	// If maxLen is too small to fit "...", just hard-truncate.
+	if maxLen <= 3 {
+		return snippet[:maxLen]
 	}
 
 	// 尝试在单词边界截断

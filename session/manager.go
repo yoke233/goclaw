@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -162,6 +164,7 @@ func (m *Manager) Save(session *Session) error {
 	encoder := json.NewEncoder(file)
 	metaLine := map[string]interface{}{
 		"_type":      "metadata",
+		"key":        session.Key,
 		"created_at": createdAt,
 		"updated_at": updatedAt,
 		"metadata":   sessionMetadata,
@@ -222,9 +225,14 @@ func (m *Manager) Delete(key string) error {
 	delete(m.sessions, key)
 
 	// 删除文件
-	filePath := m.sessionPath(key)
-	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		return err
+	paths := []string{
+		m.sessionPath(key),
+		m.legacySessionPath(key),
+	}
+	for _, filePath := range paths {
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 
 	return nil
@@ -245,12 +253,41 @@ func (m *Manager) List() ([]string, error) {
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".jsonl" {
-			key := strings.TrimSuffix(entry.Name(), ".jsonl")
-			keys = append(keys, key)
+			fullPath := filepath.Join(m.baseDir, entry.Name())
+			if key, ok := m.readKeyFromSessionFile(fullPath); ok {
+				keys = append(keys, key)
+				continue
+			}
+
+			// Fallback: derive from filename (works for test fixtures / legacy files).
+			keys = append(keys, strings.TrimSuffix(entry.Name(), ".jsonl"))
 		}
 	}
 
 	return keys, nil
+}
+
+func (m *Manager) readKeyFromSessionFile(path string) (string, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var raw map[string]interface{}
+	if err := decoder.Decode(&raw); err != nil {
+		return "", false
+	}
+
+	if msgType, ok := raw["_type"].(string); !ok || msgType != "metadata" {
+		return "", false
+	}
+	key, _ := raw["key"].(string)
+	if key == "" {
+		return "", false
+	}
+	return key, true
 }
 
 // load 从磁盘加载会话
@@ -260,7 +297,14 @@ func (m *Manager) load(key string) (*Session, error) {
 	// 打开文件
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		// Backward compatibility: fall back to the legacy sanitized filename.
+		if os.IsNotExist(err) {
+			legacyPath := m.legacySessionPath(key)
+			file, err = os.Open(legacyPath)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer file.Close()
 
@@ -283,6 +327,9 @@ func (m *Manager) load(key string) (*Session, error) {
 
 		// 检查是否为元数据行
 		if msgType, ok := raw["_type"].(string); ok && msgType == "metadata" {
+			if storedKey, ok := raw["key"].(string); ok && storedKey != "" {
+				session.Key = storedKey
+			}
 			if createdAt, ok := raw["created_at"].(string); ok {
 				session.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 			}
@@ -308,14 +355,19 @@ func (m *Manager) load(key string) (*Session, error) {
 
 // sessionPath 获取会话文件路径
 func (m *Manager) sessionPath(key string) string {
-	// 将 key 中的特殊字符替换为下划线
+	sum := sha256.Sum256([]byte(key))
+	name := hex.EncodeToString(sum[:])
+	return filepath.Join(m.baseDir, name+".jsonl")
+}
+
+func (m *Manager) legacySessionPath(key string) string {
+	// Legacy scheme: replace reserved characters with '_' (not collision-safe).
 	safeKey := strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
 			return '_'
 		}
 		return r
 	}, key)
-
 	return filepath.Join(m.baseDir, safeKey+".jsonl")
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sdkapi "github.com/cexll/agentsdk-go/pkg/api"
+	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
 	sdktasks "github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	sdktool "github.com/cexll/agentsdk-go/pkg/tool"
@@ -101,6 +102,48 @@ func (r *AgentSDKMainRuntime) Run(ctx context.Context, req MainRunRequest) (*Mai
 		output = strings.TrimSpace(resp.Result.Output)
 	}
 	return &MainRunResult{Output: output}, nil
+}
+
+// RunStream executes a single main-agent turn with streaming events.
+func (r *AgentSDKMainRuntime) RunStream(ctx context.Context, req MainRunRequest) (<-chan StreamEvent, error) {
+	if strings.TrimSpace(req.Prompt) == "" && len(req.Media) == 0 {
+		return nil, fmt.Errorf("prompt or media is required")
+	}
+
+	entry, agentID, err := r.getOrCreateRuntimeEntry(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if entry == nil || entry.runtime == nil {
+		r.releaseRuntime(agentID, entry)
+		return nil, fmt.Errorf("runtime is not available")
+	}
+	runtime := entry.runtime
+
+	request := sdkapi.Request{
+		Prompt:        req.Prompt,
+		SessionID:     strings.TrimSpace(req.SessionKey),
+		Metadata:      req.Metadata,
+		ToolWhitelist: append([]string(nil), req.ToolWhitelist...),
+	}
+	request.ContentBlocks = buildContentBlocks(req.Prompt, req.Media)
+
+	stream, err := runtime.RunStream(ctx, request)
+	if err != nil {
+		r.releaseRuntime(agentID, entry)
+		return nil, err
+	}
+
+	out := make(chan StreamEvent, 128)
+	go func() {
+		defer close(out)
+		defer r.releaseRuntime(agentID, entry)
+		for evt := range stream {
+			out <- evt
+		}
+	}()
+	return out, nil
 }
 
 // Close releases all cached runtime instances.
@@ -246,7 +289,21 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 			zap.String("skills_dir", mainSkillsDir),
 			zap.String("warning", w))
 	}
-	settingsOverrides, mcpWarnings := buildAgentSDKSettingsOverrides(workspace)
+	pluginResult := extensions.LoadClaudePlugins(workspace)
+	for _, w := range pluginResult.Warnings {
+		logger.Warn("Main plugin warning",
+			zap.String("agent_id", agentID),
+			zap.String("workspace", workspace),
+			zap.String("warning", w))
+	}
+
+	mergedSkills := mergeSkillRegistrations(pluginResult.Skills, skillRegs)
+	mergedHooks := append([]corehooks.ShellHook{}, pluginResult.Hooks...)
+	mergedHooks = append(mergedHooks, hookRegs...)
+	mergedCommands := mergeCommandRegistrations(pluginResult.Commands, nil)
+	mergedSubagents := mergeSubagentRegistrations(pluginResult.Subagents, nil)
+
+	settingsOverrides, mcpWarnings := buildAgentSDKSettingsOverrides(r.cfg, workspace, pluginResult.MCP)
 	for _, w := range mcpWarnings {
 		logger.Warn("Main MCP warning",
 			zap.String("agent_id", agentID),
@@ -263,8 +320,10 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 		Timeout:           runtimeTimeout,
 		TaskStore:         r.taskStore,
 		Tools:             buildAgentSDKTools(r.tools.ListExisting()),
-		Skills:            skillRegs,
-		TypedHooks:        hookRegs,
+		Skills:            mergedSkills,
+		Commands:          mergedCommands,
+		Subagents:         mergedSubagents,
+		TypedHooks:        mergedHooks,
 		SettingsOverrides: settingsOverrides,
 	})
 	if err != nil {

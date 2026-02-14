@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/channels"
 	"github.com/smallnest/goclaw/config"
@@ -45,6 +47,7 @@ type Server struct {
 	connectionsMu sync.RWMutex
 	enableAuth    bool
 	authToken     string
+	agentMgr      *agent.AgentManager
 }
 
 // WebSocketConfig WebSocket 配置
@@ -67,7 +70,7 @@ type WebSocketConfig struct {
 
 // NewServer 创建网关服务器
 func NewServer(cfg *config.GatewayConfig, messageBus *bus.MessageBus, channelMgr *channels.Manager, sessionMgr *session.Manager) *Server {
-	return &Server{
+	srv := &Server{
 		config: cfg,
 		wsConfig: &WebSocketConfig{
 			Host:           "0.0.0.0",
@@ -83,18 +86,52 @@ func NewServer(cfg *config.GatewayConfig, messageBus *bus.MessageBus, channelMgr
 		bus:         messageBus,
 		channelMgr:  channelMgr,
 		sessionMgr:  sessionMgr,
-		handler:     NewHandler(messageBus, sessionMgr, channelMgr),
 		connections: make(map[string]*Connection),
 	}
+	srv.handler = NewHandler(messageBus, sessionMgr, channelMgr)
+	srv.handler.SetNotifier(srv)
+	return srv
 }
 
 // SetWebSocketConfig 设置 WebSocket 配置
 func (s *Server) SetWebSocketConfig(cfg *WebSocketConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if cfg == nil {
+		return
+	}
 	s.wsConfig = cfg
 	s.enableAuth = cfg.EnableAuth
 	s.authToken = cfg.AuthToken
+}
+
+// SetAgentManager injects an agent manager for streaming requests.
+func (s *Server) SetAgentManager(manager *agent.AgentManager) {
+	s.mu.Lock()
+	s.agentMgr = manager
+	s.mu.Unlock()
+	if s.handler != nil {
+		s.handler.SetAgentManager(manager)
+	}
+}
+
+// Notify sends a notification to a specific WebSocket session.
+func (s *Server) Notify(sessionID string, method string, data interface{}) error {
+	if s == nil {
+		return fmt.Errorf("server is nil")
+	}
+	payload, err := s.handler.BroadcastNotification(method, data)
+	if err != nil {
+		return err
+	}
+
+	s.connectionsMu.RLock()
+	conn := s.connections[sessionID]
+	s.connectionsMu.RUnlock()
+	if conn == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	return conn.SendMessage(websocket.TextMessage, payload)
 }
 
 // Start 启动服务器
@@ -345,7 +382,17 @@ func (s *Server) handleGenericWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// 从 URL 路径提取通道名称
 	// /webhook/{channel}
-	channelName := r.URL.Path[len("/webhook/"):]
+	const prefix = "/webhook/"
+	path := r.URL.Path
+	if !strings.HasPrefix(path, prefix) {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	if len(path) <= len(prefix) {
+		http.Error(w, "Channel not specified", http.StatusBadRequest)
+		return
+	}
+	channelName := path[len(prefix):]
 	if channelName == "" {
 		http.Error(w, "Channel not specified", http.StatusBadRequest)
 		return

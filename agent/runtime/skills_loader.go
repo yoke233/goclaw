@@ -77,7 +77,7 @@ func (t *toolList) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func buildSubagentSkillRegistrations(req SubagentRunRequest) ([]sdkapi.SkillRegistration, []corehooks.ShellHook, []string) {
+func buildSubagentSkillRegistrations(req SubagentRunRequest, plugins extensions.ClaudePluginResult) ([]sdkapi.SkillRegistration, []corehooks.ShellHook, []string) {
 	baseRoot := resolveSubagentBaseRoot(req)
 	repoRoot := strings.TrimSpace(req.RepoDir)
 
@@ -90,12 +90,15 @@ func buildSubagentSkillRegistrations(req SubagentRunRequest) ([]sdkapi.SkillRegi
 		repoSkillsDir = extensions.AgentsSkillsDir(repoRoot)
 	}
 
-	baseSkills, baseWarnings := loadSkillsFromDir(baseSkillsDir)
-	repoSkills, repoWarnings := loadSkillsFromDir(repoSkillsDir)
+	baseSkills, _, baseWarnings := loadSkillsFromDir(baseSkillsDir)
+	repoSkills, repoDisabled, repoWarnings := loadSkillsFromDir(repoSkillsDir)
 
 	merged := make(map[string]sdkapi.SkillRegistration, len(baseSkills)+len(repoSkills))
 	for name, reg := range baseSkills {
 		merged[name] = reg
+	}
+	for name := range repoDisabled {
+		delete(merged, name)
 	}
 	for name, reg := range repoSkills {
 		merged[name] = reg // repo overrides base
@@ -115,37 +118,40 @@ func buildSubagentSkillRegistrations(req SubagentRunRequest) ([]sdkapi.SkillRegi
 	warnings := make([]string, 0, len(baseWarnings)+len(repoWarnings)+1)
 	warnings = append(warnings, baseWarnings...)
 	warnings = append(warnings, repoWarnings...)
-	if len(regs) == 0 {
-		warnings = append(warnings, "no skills loaded from layered .agents/skills directories")
+	mergedRegs := mergeSkillRegistrations(plugins.Skills, regs)
+	if len(mergedRegs) == 0 {
+		warnings = append(warnings, "no skills loaded from layered .agents/skills directories or plugins")
 	}
 
+	hooks := append([]corehooks.ShellHook{}, plugins.Hooks...)
 	// hooks are not part of the .agents/skills convention (yet)
-	return regs, nil, warnings
+	return mergedRegs, hooks, warnings
 }
 
-func loadSkillsFromDir(skillsDir string) (map[string]sdkapi.SkillRegistration, []string) {
+func loadSkillsFromDir(skillsDir string) (map[string]sdkapi.SkillRegistration, map[string]struct{}, []string) {
 	skillsDir = strings.TrimSpace(skillsDir)
 	if skillsDir == "" {
-		return map[string]sdkapi.SkillRegistration{}, nil
+		return map[string]sdkapi.SkillRegistration{}, map[string]struct{}{}, nil
 	}
 
 	stat, err := os.Stat(skillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]sdkapi.SkillRegistration{}, nil
+			return map[string]sdkapi.SkillRegistration{}, map[string]struct{}{}, nil
 		}
-		return map[string]sdkapi.SkillRegistration{}, []string{fmt.Sprintf("stat skills dir %s: %v", skillsDir, err)}
+		return map[string]sdkapi.SkillRegistration{}, map[string]struct{}{}, []string{fmt.Sprintf("stat skills dir %s: %v", skillsDir, err)}
 	}
 	if stat == nil || !stat.IsDir() {
-		return map[string]sdkapi.SkillRegistration{}, []string{fmt.Sprintf("skills path is not a directory: %s", skillsDir)}
+		return map[string]sdkapi.SkillRegistration{}, map[string]struct{}{}, []string{fmt.Sprintf("skills path is not a directory: %s", skillsDir)}
 	}
 
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return map[string]sdkapi.SkillRegistration{}, []string{fmt.Sprintf("read skills dir %s: %v", skillsDir, err)}
+		return map[string]sdkapi.SkillRegistration{}, map[string]struct{}{}, []string{fmt.Sprintf("read skills dir %s: %v", skillsDir, err)}
 	}
 
 	out := make(map[string]sdkapi.SkillRegistration)
+	disabled := make(map[string]struct{})
 	var warnings []string
 
 	for _, entry := range entries {
@@ -164,6 +170,9 @@ func loadSkillsFromDir(skillsDir string) (map[string]sdkapi.SkillRegistration, [
 
 		skillDir := filepath.Join(skillsDir, dirName)
 		if fileExists(filepath.Join(skillDir, ".disabled")) {
+			// A repo-level .disabled file should suppress an inherited base skill with
+			// the same name, so we record it as a tombstone for merges.
+			disabled[dirName] = struct{}{}
 			continue
 		}
 
@@ -236,7 +245,7 @@ func loadSkillsFromDir(skillsDir string) (map[string]sdkapi.SkillRegistration, [
 		}
 	}
 
-	return out, warnings
+	return out, disabled, warnings
 }
 
 func resolveSkillFile(skillDir string) string {

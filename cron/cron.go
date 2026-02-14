@@ -1,13 +1,18 @@
 package cron
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
 // Cron 定时任务管理器
 type Cron struct {
-	jobs map[string]*ScheduledJob
-	stop chan struct{}
+	jobs     map[string]*ScheduledJob
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // ScheduledJob 定时任务
@@ -61,7 +66,12 @@ func (c *Cron) Run() {
 
 // Stop 停止 Cron
 func (c *Cron) Stop() {
-	close(c.stop)
+	if c == nil {
+		return
+	}
+	c.stopOnce.Do(func() {
+		close(c.stop)
+	})
 }
 
 // Schedule 添加调度
@@ -82,9 +92,27 @@ func (c *Cron) Remove(id string) {
 
 // Parse 解析 cron 表达式（简化版）
 func Parse(spec string) (Schedule, error) {
+	s := strings.TrimSpace(spec)
+	if s == "" {
+		return nil, fmt.Errorf("empty cron spec")
+	}
+
 	// 简化实现：只支持 "every X minutes" 格式
-	// 实际应该使用完整的 cron 解析器
-	return ScheduleFunc(func(t time.Time) time.Time {
-		return t.Add(time.Minute)
-	}), nil
+	// 例：every 5 minutes
+	fields := strings.Fields(s)
+	if len(fields) == 3 && strings.EqualFold(fields[0], "every") {
+		n, err := strconv.Atoi(fields[1])
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid interval %q", fields[1])
+		}
+		unit := strings.ToLower(fields[2])
+		if unit != "minute" && unit != "minutes" {
+			return nil, fmt.Errorf("unsupported unit %q", fields[2])
+		}
+		return ScheduleFunc(func(t time.Time) time.Time {
+			return t.Add(time.Duration(n) * time.Minute)
+		}), nil
+	}
+
+	return nil, fmt.Errorf("invalid cron spec: %q", spec)
 }

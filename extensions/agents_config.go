@@ -205,19 +205,29 @@ func mergeMCPServerConfig(lower, higher MCPServerConfig) MCPServerConfig {
 		out.URL = strings.TrimSpace(higher.URL)
 	}
 	if higher.Env != nil {
-		if out.Env == nil {
-			out.Env = map[string]string{}
-		}
-		for k, v := range higher.Env {
-			out.Env[k] = v
+		// Explicit empty map in higher layer clears inherited env.
+		if len(higher.Env) == 0 {
+			out.Env = nil
+		} else {
+			if out.Env == nil {
+				out.Env = map[string]string{}
+			}
+			for k, v := range higher.Env {
+				out.Env[k] = v
+			}
 		}
 	}
 	if higher.HTTPHeaders != nil {
-		if out.HTTPHeaders == nil {
-			out.HTTPHeaders = map[string]string{}
-		}
-		for k, v := range higher.HTTPHeaders {
-			out.HTTPHeaders[k] = v
+		// Explicit empty map in higher layer clears inherited headers.
+		if len(higher.HTTPHeaders) == 0 {
+			out.HTTPHeaders = nil
+		} else {
+			if out.HTTPHeaders == nil {
+				out.HTTPHeaders = map[string]string{}
+			}
+			for k, v := range higher.HTTPHeaders {
+				out.HTTPHeaders[k] = v
+			}
 		}
 	}
 	if strings.TrimSpace(higher.BearerTokenEnvVar) != "" {
