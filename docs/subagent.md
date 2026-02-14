@@ -166,9 +166,12 @@ goclaw 支持两种类型的分身：
 |------|------|------|------|
 | `task` | string | 是 | 任务描述 |
 | `label` | string | 否 | 可选标签 |
+| `task_id` | string | 否 | 关联任务 ID（用于任务系统进度绑定） |
 | `agent_id` | string | 否 | 目标 Agent ID（跨 Agent 创建） |
 | `model` | string | 否 | 模型覆盖 |
 | `thinking` | string | 否 | 思考级别覆盖 (low/medium/high) |
+| `repo_dir` | string | 否 | 项目目录（repo root），必须是已存在目录 |
+| `mcp_config_path` | string | 否 | MCP 配置路径覆盖（用于指定本次运行加载的 MCP 配置） |
 | `run_timeout_seconds` | int | 否 | 超时时间（秒） |
 | `cleanup` | string | 否 | 清理策略: `delete` (立即删除) 或 `keep` (自动归档) |
 
