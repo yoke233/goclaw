@@ -13,6 +13,12 @@
 
 - `docs/prd/metrics/phase-1-instrumentation.md`：提前埋点规范（Phase 1 启动，支撑 Phase 4/5）
 
+TDD 交付计划：
+
+- `docs/prd/tdd/phase-1-test-spec.md`：Phase 1 验收测试规格（ATDD）
+- `docs/prd/tdd/contract-tests.md`：协议契约测试规格
+- `docs/prd/tdd/slicing-plan.md`：Red/Green/Refactor 实施切片计划
+
 关联协议（真源）：
 
 - `docs/operating-model/phases.md`
