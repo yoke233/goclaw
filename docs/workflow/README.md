@@ -10,7 +10,7 @@
 
 V1/V1.1 本项目的关键选择（先记住这几条，其它都是细节）：
 
-- 协作真源：Outbox Thread（默认 GitHub Issue 线程；本地/离线可用 SQLite 承载）
+- 协作真源：Issue（默认承载在 GitHub/GitLab，亦可本地 SQLite）
 - 配置真源：只保留 Outbox repo 内的 `<outbox_repo>/.agents/workflow.toml`（其它 repo 不再放第二份）
 - Claim 真源：Outbox 的 `assignee` 字段（GitHub assignee / SQLite threads.assignee；`/claim` 只是触发手段，文本不算事实）
 - 状态标签：`state:*` 推荐使用以保持队列清晰，但 Phase 1 不应作为硬闸门；Phase 2 起由 lead 尽量自动补齐/规范化
@@ -25,7 +25,7 @@ V1/V1.1 本项目的关键选择（先记住这几条，其它都是细节）：
 - `docs/operating-model/executor-protocol.md`：Worker 可插拔执行协议（上下文注入、WorkOrder/WorkResult、切换 worker 幂等语义）
 - `docs/workflow/multi-repo-contracts.md`：多 repo + contracts(proto) 的组织方式与对齐规则
 - `docs/workflow/outbox-and-mailbox-skill.md`：用 skill 将沟通写入 outbox（Outbox backend + 固定模板：GitHub Issues 或 SQLite）
-- `docs/workflow/approval-policy.md`：Issue 线程的“盖章/Accepted”审批策略（V1: any）
+- `docs/workflow/approval-policy.md`：Issue 的“盖章/Accepted”审批策略（V1: any）
 - `docs/workflow/workflow-profile.md`：项目级 `.agents/workflow.toml` 规范（动态 repo/角色/并发/监听）
 - `docs/workflow/issue-protocol.md`：Issue 协作协议（labels、监听、claim、blocked、依赖、开工条件、评论模板）
 - `docs/workflow/label-catalog.md`：固定 label 集合、监听矩阵、状态迁移规则

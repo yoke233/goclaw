@@ -2,10 +2,10 @@
 
 Use this as a *recommended* PR description structure for worker outputs.
 
-Goal: make PRs traceable to the Outbox Thread, and make evidence easy to audit.
+Goal: make PRs traceable to the Issue, and make evidence easy to audit.
 
 ## Meta
-- IssueRef: <owner/repo#number | local#id>   # MUST (Outbox issue)
+- IssueRef: <owner/repo#number | local#id>   # MUST (Issue)
 - Repo: <contracts|backend|frontend|...>
 - Role: <architect|backend|frontend|qa|integrator|recorder>
 - ContractsRef: <contracts@sha-or-tag | none>

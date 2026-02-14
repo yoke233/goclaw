@@ -44,13 +44,13 @@ V1 的推荐真源是代码托管平台自带的计算结果：
 - CI checks 状态（pass/fail）
 - 必要时补充：合并策略、分支保护规则
 
-Outbox Thread 的作用是“协作与归档”，不替代 PR review 本身。
+Issue 的作用是“协作与归档”，不替代 PR review 本身。
 
 ## 无 forge / 本地模式（只有 git + sqlite）
 
 如果你一开始不接入 GitHub/GitLab（没有 PR review 事件、没有 CI checks），仍然可以跑 Phase 1：
 
-- Reviewer 的判定需要落到 Outbox Thread 的结构化事件里（可计算、可审计）。
+- Reviewer 的判定需要落到 Issue 的结构化事件里（可计算、可审计）。
 - 推荐由 Lead 单写者把 Reviewer 的输入规范化写回 Outbox（避免格式漂移）。
 
 最小可行（Phase 1）：
@@ -69,7 +69,7 @@ Outbox Thread 的作用是“协作与归档”，不替代 PR review 本身。
 建议的闭环方式：
 
 1. Reviewer 在 PR 上给出 review（GitHub 记录为事实）
-2. Lead/Integrator 将“review 判定 + 证据链接”规范化写回 Outbox Thread
+2. Lead/Integrator 将“review 判定 + 证据链接”规范化写回 Issue
 3. Integrator 满足合并条件后 merge，并把 Evidence 回填 Outbox
 
 这样可以在 Phase 1 不做复杂自动化的情况下，仍然保证判定可审计。

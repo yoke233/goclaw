@@ -4,7 +4,7 @@
 
 真源（必须记住）：
 - 配置真源：`<outbox_repo>/.agents/workflow.toml`（只保留这一份）
-- 协作真源：Outbox Issue（SQLite；`IssueRef = local#<thread_id>`）
+- 协作真源：Issue（SQLite；`IssueRef = local#<thread_id>`）
 - 交付真源：git commit（没有 PR 时用 `git:<sha>`）
 - 质量真源：可审计证据（本地无 PR review/CI 时，用 Outbox comment 承接 Reviewer 判定）
 

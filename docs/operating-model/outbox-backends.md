@@ -1,6 +1,6 @@
 # Outbox Backends (承载系统抽象)
 
-目标：将“协作真源线程（Outbox Thread）”与具体承载系统解耦，允许在不同阶段选择不同 backend：
+目标：将“协作真源线程（Issue）”与具体承载系统解耦，允许在不同阶段选择不同 backend：
 
 - 本地/离线：SQLite（单机、最小依赖）
 - 团队协作：GitHub/GitLab Issues（共享、审计、权限）
@@ -8,7 +8,7 @@
 
 本文件只定义**协议需要的最小能力集合**与 V1 推荐的 SQLite schema。
 
-## 1) Outbox Issue / Event 抽象
+## 1) Issue / Event 抽象
 
 - Issue：一个可追加事件的协作条目（唯一主键；语义等价于“issue 线程”）
 - Event：Issue 中的一条追加记录（append-only）

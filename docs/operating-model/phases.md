@@ -7,7 +7,7 @@
 完成条件：
 
 - 需求层：Issue Spec 区块（或 `SpecRef`）可执行（至少 Acceptance Criteria / Out of Scope / Risks）
-- 交付层：Outbox Thread + 交付物关联规则明确（`IssueRef` 必填，Changes 可为 PR 或 commit）
+- 交付层：Issue + 交付物关联规则明确（`IssueRef` 必填，Changes 可为 PR 或 commit）
 - 质量层：review/测试 的证据来源明确（forge 模式下以 PR review/CI 为真源；本地模式下以 Outbox 的结构化质量判定为真源）
 
 ## Phase 1: 人工跑通闭环 (Lean)

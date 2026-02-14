@@ -20,7 +20,7 @@
 
 - 本文中的 `<outbox_repo>` 指包含 `.agents/workflow.toml` 的那个 repo 的本地目录。
   - 它是项目的“配置锚点目录”（single source of config truth）。
-  - 在 GitHub/GitLab backend 下，它通常也就是承载 Outbox Thread 的 repo（例如 `contracts/`）。
+  - 在 GitHub/GitLab backend 下，它通常也就是承载 Issue 的 repo（例如 `contracts/`）。
   - 在 SQLite backend 下，它通常就是你的项目仓库根目录（单仓项目），Outbox DB 的相对路径以此目录解析。
 
 ## 多环境运行（重要说明）

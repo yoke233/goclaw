@@ -10,9 +10,9 @@
 
 因此沟通建议从“互聊”切换为“写入一个可订阅的 outbox”。
 
-## Outbox 的推荐载体：Issue 线程（GitHub/GitLab）或本地 SQLite
+## Outbox 的推荐载体：Issue（GitHub/GitLab）或本地 SQLite
 
-Issue 线程具备天然的队列能力（无论承载在 GitHub/GitLab，还是本地 DB）：
+Issue 具备天然的队列能力（无论承载在 GitHub/GitLab，还是本地 DB）：
 
 - 可持久化、可追踪
 - 支持 label（topic）、assign（领取）、close（完成）
@@ -32,7 +32,7 @@ V1 约定（工作流当前决策）：
   - SQLite：`outbox.backend = "sqlite"` + `outbox.path = ".agents/state/outbox.sqlite"`
 - 如果项目存在独立 `contracts` repo，推荐将 Outbox 放在 contracts（便于把“接口与决策”集中）。
 - 如果项目是后端-only 单 repo，则 Outbox 可直接放在该 repo。
-- Outbox Thread 是协作真源（讨论、阻塞、证据、结论都在同一线程内可回放）。
+- Issue 是协作真源（讨论、阻塞、证据、结论都在同一线程内可回放）。
 - 不使用 goclaw `task_id` 作为协作主线，避免双真源状态漂移（后续阶段可再引入 task 镜像）。
 
 备选/降级：
@@ -71,7 +71,7 @@ mailbox skill 的目标是同时提供“统一投递点 + 固定输出结构”
 
 ## 写入权限建议（V1 推荐：结构化写回由 Lead 单写者负责）
 
-为了保证 Outbox Thread 中的“结构化事实”稳定一致，推荐采用单写者路径：
+为了保证 Issue 中的“结构化事实”稳定一致，推荐采用单写者路径：
 
 - Worker 的输出允许不规范：更像“原始素材”（日志片段、命令结果、PR 链接）。
 - Lead/Integrator/Recorder 负责把素材转换为固定模板 comment，并写回 Outbox（mailbox.reply/post）。
@@ -110,7 +110,7 @@ V1 采用固定 label 基线，便于所有角色与自动化共享同一套路�
 
 ## 决策盖章（Accepted Gate）
 
-Issue 线程里的“讨论”不等于“决定”。建议引入可配置的盖章人集合与最小审批策略：
+Issue 里的“讨论”不等于“决定”。建议引入可配置的盖章人集合与最小审批策略：
 
 - V1：`any`（任一盖章人通过即视为 Accepted）
 - 盖章动作建议通过 issue 评论命令触发（例如 `/accept`），并由系统写入 label（例如 `decision:accepted`）

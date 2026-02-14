@@ -9,17 +9,17 @@
 
 关键原则：
 
-- Outbox Thread 里的“结构化事实”由 Lead 单写者写回（见 `docs/workflow/lead-worker.md`）
+- Issue 里的“结构化事实”由 Lead 单写者写回（见 `docs/workflow/lead-worker.md`）
 - Worker 的输出允许不规范，但必须可被规范化（至少提供锚点）
 
 ## 1) 核心抽象
 
 ### WorkUnit
 
-一个可交付的工作单元。推荐与一个 Outbox Issue 绑定：
+一个可交付的工作单元。推荐与一个 Issue 绑定：
 
 - `WorkUnitId`：稳定 ID（建议 = `IssueRef`）
-- 真源线程：Outbox Thread（Issue）
+- 真源线程：Issue
 
 并行建议：
 
@@ -98,7 +98,7 @@
 
 最小字段（MVP）：
 
-- `issue_ref`：Outbox IssueRef（必须）
+- `issue_ref`：IssueRef（必须）
 - `run_id`：本次 WorkRun 的唯一 ID（必须）
 - `role`：本次执行的角色（必须）
 - `repo_dir`：执行目录（必须）

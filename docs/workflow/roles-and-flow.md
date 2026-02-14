@@ -14,7 +14,7 @@
 
 职责：
 
-- 保证每次并行都有一个可追踪的“主键”（V1 选用 Outbox Thread 的编号；backend 可为 GitHub/GitLab Issue 或本地 SQLite thread）
+- 保证每次并行都有一个可追踪的“主键”（V1 选用 Issue 的编号；backend 可为 GitHub/GitLab Issue 或本地 SQLite thread）
 - 启动执行单元时明确 `repo_dir`（多 repo 时每个执行单元指向自己的 repo；contracts 相关任务指向 contracts repo）
 - 确保任务描述中包含「当前 contracts 版本引用」（例如 `contracts@<sha|tag>`，或 issue 中约定的版本）
 - 发现阻塞时触发 outbox（发 issue/消息），并把问题路由给合适角色
@@ -88,7 +88,7 @@ Recorder 的价值在于把“线程”变成“可回放的状态机”，减�
 
 ## 推荐流程（不强制）
 
-1. 需求进入：在 Outbox repo（由 `workflow.toml` 指定）创建一个 Outbox Thread（GitHub Issue 或本地 SQLite thread），写“目标 + 验收标准 + contracts 引用/版本（如适用）”。
+1. 需求进入：在 Outbox repo（由 `workflow.toml` 指定）创建一个 Issue（GitHub Issue 或本地 SQLite thread），写“目标 + 验收标准 + contracts 引用/版本（如适用）”。
 2. contracts 就绪：架构师确认 proto/版本；必要时先合入 contracts 变更。
 3. 并行实现（两种模式）：
    手动模式：主 agent 分别对 frontend/backend/qa 启动 worker（subagent，各自 `repo_dir`）。
@@ -99,7 +99,7 @@ Recorder 的价值在于把“线程”变成“可回放的状态机”，减�
 
 V1 约定（本仓库当前决策）：
 
-- 不使用 goclaw `task_id` 作为协作主线；以 Outbox repo 的 Issue 线程作为唯一协作真源（Outbox + 决策 + 证据）。
+- 不使用 goclaw `task_id` 作为协作主线；以 Outbox repo 的 Issue（`IssueRef`）作为唯一协作真源（Outbox + 决策 + 证据）。
 - `task_id` 可在后续阶段作为“执行镜像/统计面板”引入，但不应与 Issue 双真源并行。
 
 ## 动态角色与分组并发（项目可变）

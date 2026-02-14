@@ -19,7 +19,7 @@
 
 - Project：一个交付单元。可能是单 repo，也可能是 frontend/backend/contracts 多 repo。
 - Role：项目启用的一组角色（backend/frontend/qa/integrator/architect/recorder…），由 `<outbox_repo>/.agents/workflow.toml` 决定。
-- Outbox：公共总线，V1 以 Outbox Thread 作为协作真源；backend 可选 GitHub/GitLab Issues 或本地 SQLite（由 `workflow.toml` 的 `[outbox]` 段指定）。
+- Outbox：公共总线，V1 以 Issue 作为协作真源；backend 可选 GitHub/GitLab Issues 或本地 SQLite（由 `workflow.toml` 的 `[outbox]` 段指定）。
 - Mailbox：向 Outbox 投递/回复的固定模板（见 `docs/workflow/templates/*`）。
 - Accepted Gate：盖章机制（见 `docs/workflow/approval-policy.md`）。
 
@@ -28,7 +28,7 @@
 推荐拓扑是“一个项目 N 个常驻 Lead，每个 Lead 再拉起多个 Worker”：
 
 ```text
-Outbox Thread (Issue/SQLite)
+Issue (GitHub/GitLab/SQLite)
   -> (issue / comment / label events)
      -> Lead(backend)  -> spawn Worker x N -> PR/CI -> 回填到 Issue
      -> Lead(frontend) -> spawn Worker x M -> PR/CI -> 回填到 Issue
@@ -63,7 +63,7 @@ Lead 做：
 
 Lead 不做：
 
-- 不在一个 Issue 线程里与其他 Lead ping-pong 互相触发死循环
+- 不在同一个 Issue 下与其他 Lead ping-pong 互相触发死循环
 - 不把 Worker 的草稿/猜测写进共享记忆（除非已盖章 Accepted）
 - 不承担跨 repo 的最终收敛（那是 integrator 的职责）
 
@@ -76,7 +76,7 @@ Worker 做：
 - 在单一 repo 范围内实现、写测试、跑命令、修 CI
 - 输出证据：PR 链接、测试命令与结果、关键 diff 说明
 - 将“原始素材”回传给本 role 的 Lead（不要求严格模板，但必须可追溯）：
-  - IssueRef（对应哪个 Outbox issue）
+  - IssueRef（对应哪个 Issue）
   - Changes（PR URL 或 commit URL，至少一个）
   - Tests（跑了什么、结果如何；或明确 `n/a`）
   - BlockedBy/疑问（如有）

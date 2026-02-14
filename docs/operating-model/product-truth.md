@@ -4,7 +4,7 @@
 
 本层强调 **单一真源**：
 
-- 真源默认是 Outbox Thread（Issue）里的 Spec 区块
+- 真源默认是 Issue里的 Spec 区块
 - 若规格较大，可写到 repo 内 `spec.md`，并在 Issue 的 `SpecRef` 链接到该文件
 - 不允许出现“多个地方各写一份规格”的情况
 

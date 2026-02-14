@@ -1,8 +1,8 @@
-# Issue 协作协议（Outbox 线程）
+# Issue 协作协议（协作总线）
 
 ## 目标
 
-用 Outbox Thread（Issue 线程；可承载在 GitHub/GitLab 或本地 SQLite）作为公共总线，让多角色协作可追溯、可路由、可并行、可验收，并且避免：
+用 Issue（可承载在 GitHub/GitLab 或本地 SQLite）作为公共总线，让多角色协作可追溯、可路由、可并行、可验收，并且避免：
 
 - 规格/结论在多个地方出现不同版本
 - 讨论被误当成决定

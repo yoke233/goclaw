@@ -6,7 +6,7 @@
 
 ## 1) 真源选择（本地模式）
 
-- Spec 真源：Outbox Thread 的 Spec 区块（或 `spec.md` + `SpecRef`）
+- Spec 真源：Issue 的 Spec 区块（或 `spec.md` + `SpecRef`）
 - Outbox backend：SQLite（见 `docs/operating-model/outbox-backends.md`）
 - 交付真源：git commit（本地没有 PR URL 时，用 commit hash/branch 作为 Changes）
 - 质量真源（本地替代）：Outbox 的结构化质量判定 comment（见 `docs/operating-model/quality-gate.md` 的无 forge 模式）
@@ -86,7 +86,7 @@ auto_unblock_when_dependency_closed = true
 - 本地模式下 `outbox.backend=sqlite`，`path` 相对路径以 `workflow.toml` 所在目录解析。
 - `approvers` 在本地模式下是 actor id（字符串），不再限定为 GitHub username。
 
-## 4) Outbox Thread 的“创建/领取/写回”怎么做（本地）
+## 4) Issue 的“创建/领取/写回”怎么做（本地）
 
 本地 outbox 的 Thread/Event 语义与 GitHub 一致，只是落在 SQLite：
 
@@ -117,7 +117,7 @@ Integrator 合并后再写一条事件：
 
 本地没有 GitHub PR review 事件时，Reviewer 的判定必须写成可计算事件：
 
-- Reviewer 在 Outbox Thread 追加一条结构化 comment（由 Lead 单写者规范化写回也可）
+- Reviewer 在 Issue 追加一条结构化 comment（由 Lead 单写者规范化写回也可）
 - 使用 comment 模板的 `Review.Result = approved|changes_requested`（见模板扩展建议）
 
 Phase 1 最小可行做法：

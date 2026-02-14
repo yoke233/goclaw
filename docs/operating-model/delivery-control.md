@@ -6,7 +6,7 @@
 
 - 队列与节奏：先做什么、什么时候交付
 - 路由与闭环：谁负责、谁合并、谁验收
-- 证据回填：Outbox Thread 能回放发生过什么
+- 证据回填：Issue 能回放发生过什么
 
 ## 角色与职责边界
 
@@ -51,7 +51,7 @@ PM 不管：
 交付层有三个事实真源：
 
 1. 配置真源：`<outbox_repo>/.agents/workflow.toml`
-2. 协作真源：Outbox Thread（Issue 线程）
+2. 协作真源：Issue（`IssueRef`）
 3. 代码真源：PR/commit（以及 CI/test 证据）
 
 其它聊天记录、口头承诺都不算真源。
