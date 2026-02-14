@@ -34,7 +34,7 @@ type ClaudePluginInfo struct {
 
 // ClaudePluginResult aggregates loaded Claude Code plugin contributions.
 type ClaudePluginResult struct {
-	Skills    []sdkapi.SkillRegistration
+	SkillDirs []string
 	Commands  []sdkapi.CommandRegistration
 	Subagents []sdkapi.SubagentRegistration
 	Hooks     []corehooks.ShellHook
@@ -57,7 +57,7 @@ func LoadClaudePlugins(projectRoot string) ClaudePluginResult {
 			if len(pluginResult.Plugins) > 0 {
 				result.Plugins = append(result.Plugins, pluginResult.Plugins...)
 			}
-			result.Skills = append(result.Skills, pluginResult.Skills...)
+			result.SkillDirs = append(result.SkillDirs, pluginResult.SkillDirs...)
 			result.Commands = append(result.Commands, pluginResult.Commands...)
 			result.Subagents = append(result.Subagents, pluginResult.Subagents...)
 			result.Hooks = append(result.Hooks, pluginResult.Hooks...)
@@ -67,6 +67,8 @@ func LoadClaudePlugins(projectRoot string) ClaudePluginResult {
 			result.Warnings = append(result.Warnings, pluginResult.Warnings...)
 		}
 	}
+
+	result.SkillDirs = uniqueStrings(result.SkillDirs)
 
 	return result
 }
@@ -269,7 +271,7 @@ func loadClaudePlugin(root, projectRoot string) ClaudePluginResult {
 	mcpPaths = uniqueStrings(mcpPaths)
 
 	for _, rel := range skillPaths {
-		abs, relPath, err := resolvePluginPath(root, rel)
+		abs, _, err := resolvePluginPath(root, rel)
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("plugin %s skills path %q: %v", pluginName, rel, err))
 			continue
@@ -277,9 +279,7 @@ func loadClaudePlugin(root, projectRoot string) ClaudePluginResult {
 		if !dirExists(abs) {
 			continue
 		}
-		regs, warnings := parsePluginSkills(fsys, relPath, pluginName)
-		result.Skills = append(result.Skills, regs...)
-		result.Warnings = append(result.Warnings, warnings...)
+		result.SkillDirs = append(result.SkillDirs, abs)
 	}
 
 	for _, rel := range commandPaths {
@@ -444,25 +444,6 @@ func resolvePluginPath(root, rel string) (string, string, error) {
 	}
 	relPath = filepath.ToSlash(relPath)
 	return abs, relPath, nil
-}
-
-func parsePluginSkills(fsys fs.FS, relPath, pluginName string) ([]sdkapi.SkillRegistration, []string) {
-	if strings.TrimSpace(relPath) == "" {
-		return nil, nil
-	}
-	builtins := sdkprompts.ParseWithOptions(fsys, sdkprompts.ParseOptions{
-		SkillsDir:    relPath,
-		CommandsDir:  "__none__",
-		SubagentsDir: "__none__",
-		HooksDir:     "__none__",
-		Validate:     true,
-	})
-	warnings := collectPromptWarnings(pluginName, "skills", builtins.Errors)
-	regs := make([]sdkapi.SkillRegistration, 0, len(builtins.Skills))
-	for _, entry := range builtins.Skills {
-		regs = append(regs, sdkapi.SkillRegistration{Definition: entry.Definition, Handler: entry.Handler})
-	}
-	return regs, warnings
 }
 
 func parsePluginCommands(fsys fs.FS, relPath, pluginName string) ([]sdkapi.CommandRegistration, []string) {

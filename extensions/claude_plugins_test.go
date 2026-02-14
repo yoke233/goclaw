@@ -70,11 +70,11 @@ func TestLoadClaudePlugins_Basic(t *testing.T) {
 	}
 
 	result := LoadClaudePlugins(workspace)
-	if len(result.Skills) != 1 {
-		t.Fatalf("skills=%d, want 1", len(result.Skills))
+	if len(result.SkillDirs) != 1 {
+		t.Fatalf("skill dirs=%d, want 1", len(result.SkillDirs))
 	}
-	if result.Skills[0].Definition.Name != "demo" {
-		t.Fatalf("skill name=%q, want %q", result.Skills[0].Definition.Name, "demo")
+	if filepath.Clean(result.SkillDirs[0]) != filepath.Join(pluginRoot, "skills") {
+		t.Fatalf("skill dir=%q, want %q", result.SkillDirs[0], filepath.Join(pluginRoot, "skills"))
 	}
 	if len(result.Hooks) == 0 {
 		t.Fatalf("hooks should not be empty")

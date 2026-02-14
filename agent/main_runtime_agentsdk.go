@@ -16,6 +16,8 @@ import (
 	agenttools "github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/extensions"
+	"github.com/smallnest/goclaw/internal"
+	"github.com/smallnest/goclaw/internal/agentsdkcompat"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -274,20 +276,14 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 	}
 
 	// Load workspace extensions (skills + MCP config) at runtime creation time.
-	skillsRoleDir := "skills"
-	if sub := r.cfg.Agents.Defaults.Subagents; sub != nil {
-		if strings.TrimSpace(sub.SkillsRoleDir) != "" {
-			skillsRoleDir = strings.TrimSpace(sub.SkillsRoleDir)
-		}
-	}
-	mainRoleRoot := filepath.Join(workspace, skillsRoleDir, "main")
-	mainSkillsDir := extensions.AgentsSkillsDir(mainRoleRoot)
-	skillRegs, hookRegs, skillWarnings := loadAgentSDKRegistrations(mainSkillsDir)
-	for _, w := range skillWarnings {
-		logger.Warn("Main skills warning",
+	// Builtin skills are incrementally synced into workspace/.agents/skills.
+	mainSkillsDir := extensions.AgentsSkillsDir(workspace)
+	if err := internal.EnsureBuiltinSkillsForWorkspace(workspace); err != nil {
+		logger.Warn("Failed to sync builtin skills into workspace",
 			zap.String("agent_id", agentID),
+			zap.String("workspace", workspace),
 			zap.String("skills_dir", mainSkillsDir),
-			zap.String("warning", w))
+			zap.Error(err))
 	}
 	pluginResult := extensions.LoadClaudePlugins(workspace)
 	for _, w := range pluginResult.Warnings {
@@ -297,9 +293,13 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 			zap.String("warning", w))
 	}
 
-	mergedSkills := mergeSkillRegistrations(pluginResult.Skills, skillRegs)
+	// Keep .claude/skills compatibility while letting workspace/.agents/skills override.
+	mainClaudeSkillsDir := filepath.Join(workspace, ".claude", "skills")
+	skillDirs := agentsdkcompat.NormalizeSkillDirs(append([]string{
+		mainClaudeSkillsDir,
+	}, append(pluginResult.SkillDirs, mainSkillsDir)...))
+
 	mergedHooks := append([]corehooks.ShellHook{}, pluginResult.Hooks...)
-	mergedHooks = append(mergedHooks, hookRegs...)
 	mergedCommands := mergeCommandRegistrations(pluginResult.Commands, nil)
 	mergedSubagents := mergeSubagentRegistrations(pluginResult.Subagents, nil)
 
@@ -311,21 +311,28 @@ func (r *AgentSDKMainRuntime) getOrCreateRuntimeEntry(ctx context.Context, req M
 			zap.String("warning", w))
 	}
 
-	runtime, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:       workspace,
-		ModelFactory:      modelFactory,
-		SystemPrompt:      systemPrompt,
-		MaxIterations:     maxIterations,
-		MaxSessions:       1000,
-		Timeout:           runtimeTimeout,
-		TaskStore:         r.taskStore,
-		Tools:             buildAgentSDKTools(r.tools.ListExisting()),
-		Skills:            mergedSkills,
-		Commands:          mergedCommands,
-		Subagents:         mergedSubagents,
-		TypedHooks:        mergedHooks,
-		SettingsOverrides: settingsOverrides,
-	})
+	opts := sdkapi.Options{
+		ProjectRoot:   workspace,
+		ModelFactory:  modelFactory,
+		SystemPrompt:  systemPrompt,
+		MaxIterations: maxIterations,
+		MaxSessions:   1000,
+		Timeout:       runtimeTimeout,
+		TaskStore:     r.taskStore,
+		Tools:         buildAgentSDKTools(r.tools.ListExisting()),
+		SkillDirs:     skillDirs,
+		// GoClaw now explicitly controls skill directories and lets agentsdk load skills dynamically.
+		DisableDefaultProjectSkills: true,
+		Commands:                    mergedCommands,
+		Subagents:                   mergedSubagents,
+		TypedHooks:                  mergedHooks,
+		SettingsOverrides:           settingsOverrides,
+	}
+	logger.Info("Main runtime uses agentsdk skill directories",
+		zap.String("agent_id", agentID),
+		zap.Strings("skill_dirs", skillDirs))
+
+	runtime, err := sdkapi.New(ctx, opts)
 	if err != nil {
 		return nil, agentID, fmt.Errorf("failed to initialize main agentsdk runtime: %w", err)
 	}

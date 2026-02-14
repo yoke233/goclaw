@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"os"
 	"strings"
 
 	"github.com/smallnest/goclaw/extensions"
@@ -31,4 +32,9 @@ func isAgentsRootValid(root string) bool {
 		return true
 	}
 	return false
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info != nil && info.IsDir()
 }

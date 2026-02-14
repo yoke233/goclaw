@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/smallnest/goclaw/config"
 )
@@ -35,8 +36,24 @@ func GetConfigPath() string {
 // EnsureBuiltinSkills 确保内置技能被复制到用户目录
 // 支持增量复制：只复制缺失的技能，不会覆盖已存在的技能
 func EnsureBuiltinSkills() error {
-	goclawDir := GetGoclawDir()
-	skillsDir := filepath.Join(goclawDir, "skills")
+	return ensureBuiltinSkillsAt(filepath.Join(GetGoclawDir(), "skills"))
+}
+
+// EnsureBuiltinSkillsForWorkspace 确保内置技能被复制到 workspace/.agents/skills
+// 支持增量复制：只复制缺失的技能，不会覆盖已存在的技能。
+func EnsureBuiltinSkillsForWorkspace(workspace string) error {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return nil
+	}
+	return ensureBuiltinSkillsAt(filepath.Join(workspace, ".agents", "skills"))
+}
+
+func ensureBuiltinSkillsAt(skillsDir string) error {
+	skillsDir = strings.TrimSpace(skillsDir)
+	if skillsDir == "" {
+		return fmt.Errorf("skills directory is empty")
+	}
 
 	// 确保目录存在
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {

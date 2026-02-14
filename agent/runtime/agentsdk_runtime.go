@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,8 +14,8 @@ import (
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
 	sdkmodel "github.com/cexll/agentsdk-go/pkg/model"
-	sdkprompts "github.com/cexll/agentsdk-go/pkg/prompts"
 	"github.com/smallnest/goclaw/extensions"
+	"github.com/smallnest/goclaw/internal/agentsdkcompat"
 	"github.com/smallnest/goclaw/internal/logger"
 	"go.uber.org/zap"
 )
@@ -205,15 +206,16 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 			zap.String("warning", w))
 	}
 
-	skillsRegs, hookRegs, warnings := buildSubagentSkillRegistrations(run.req, pluginResult)
-	for _, warning := range warnings {
-		logger.Warn("Subagent skills warning",
-			zap.String("run_id", runID),
-			zap.String("goclawdir", strings.TrimSpace(run.req.GoClawDir)),
-			zap.String("roledir", strings.TrimSpace(run.req.RoleDir)),
-			zap.String("repodir", repoDir),
-			zap.String("warning", warning))
+	baseRoot := resolveSubagentBaseRoot(run.req)
+	baseSkillsDir := ""
+	if strings.TrimSpace(baseRoot) != "" {
+		baseSkillsDir = extensions.AgentsSkillsDir(baseRoot)
 	}
+	repoSkillsDir := extensions.AgentsSkillsDir(repoDir)
+	repoClaudeSkillsDir := filepath.Join(repoDir, ".claude", "skills")
+	skillDirs := agentsdkcompat.NormalizeSkillDirs(append([]string{
+		repoClaudeSkillsDir,
+	}, append(pluginResult.SkillDirs, baseSkillsDir, repoSkillsDir)...))
 
 	settingsOverrides, mcpWarnings := buildSubagentSDKSettingsOverrides(run.req, pluginResult.MCP)
 	for _, w := range mcpWarnings {
@@ -267,17 +269,24 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 		maxIterations = 15
 	}
 
-	rt, err := sdkapi.New(ctx, sdkapi.Options{
-		ProjectRoot:              repoDir,
-		ModelFactory:             modelProvider,
-		SystemPrompt:             strings.TrimSpace(run.req.SystemPrompt),
-		Skills:                   skillsRegs,
-		TypedHooks:               hookRegs,
-		MaxIterations:            maxIterations,
-		Timeout:                  time.Duration(timeoutSeconds) * time.Second,
-		SettingsOverrides:        settingsOverrides,
-		PermissionRequestHandler: permissionHandler,
-	})
+	opts := sdkapi.Options{
+		ProjectRoot:  repoDir,
+		ModelFactory: modelProvider,
+		SystemPrompt: strings.TrimSpace(run.req.SystemPrompt),
+		SkillDirs:    skillDirs,
+		// Subagent runtime now relies on explicit skill directories.
+		DisableDefaultProjectSkills: true,
+		MaxIterations:               maxIterations,
+		Timeout:                     time.Duration(timeoutSeconds) * time.Second,
+		SettingsOverrides:           settingsOverrides,
+		PermissionRequestHandler:    permissionHandler,
+		TypedHooks:                  append([]corehooks.ShellHook{}, pluginResult.Hooks...),
+	}
+	logger.Info("Subagent runtime uses agentsdk skill directories",
+		zap.String("run_id", runID),
+		zap.Strings("skill_dirs", skillDirs))
+
+	rt, err := sdkapi.New(ctx, opts)
 	if err != nil {
 		status := RunStatusError
 		errMsg := fmt.Sprintf("failed to initialize agentsdk runtime: %v", err)
@@ -334,59 +343,10 @@ func (r *AgentsdkRuntime) execute(parentCtx context.Context, runID string) {
 			output = strings.TrimSpace(fmt.Sprintf("%v", v))
 		}
 	}
-	if len(warnings) > 0 {
-		warnText := strings.Join(warnings, "\n")
-		if output == "" {
-			output = warnText
-		} else {
-			output += "\n\n" + warnText
-		}
-	}
-
 	run.result = &SubagentRunResult{
 		Status: RunStatusOK,
 		Output: output,
 	}
-}
-
-func loadRoleRegistrations(skillsDir string) ([]sdkapi.SkillRegistration, []corehooks.ShellHook, []string) {
-	if strings.TrimSpace(skillsDir) == "" {
-		return nil, nil, []string{"skills directory is empty"}
-	}
-
-	stat, err := os.Stat(skillsDir)
-	if err != nil {
-		return nil, nil, []string{fmt.Sprintf("skills directory missing: %s", skillsDir)}
-	}
-	if !stat.IsDir() {
-		return nil, nil, []string{fmt.Sprintf("skills path is not a directory: %s", skillsDir)}
-	}
-
-	builtins := sdkprompts.ParseWithOptions(os.DirFS(skillsDir), sdkprompts.ParseOptions{
-		SkillsDir:    ".",
-		CommandsDir:  "__none__",
-		SubagentsDir: "__none__",
-		HooksDir:     "__none__",
-	})
-
-	warnings := make([]string, 0, len(builtins.Errors)+1)
-	for _, parseErr := range builtins.Errors {
-		if parseErr != nil {
-			warnings = append(warnings, fmt.Sprintf("skills parse warning: %v", parseErr))
-		}
-	}
-	if len(builtins.Skills) == 0 {
-		warnings = append(warnings, fmt.Sprintf("no SKILL.md found under: %s", skillsDir))
-	}
-
-	regs := make([]sdkapi.SkillRegistration, 0, len(builtins.Skills))
-	for _, entry := range builtins.Skills {
-		regs = append(regs, sdkapi.SkillRegistration{
-			Definition: entry.Definition,
-			Handler:    entry.Handler,
-		})
-	}
-	return regs, builtins.Hooks, warnings
 }
 
 func normalizeModelName(raw string) string {
