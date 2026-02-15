@@ -7,6 +7,10 @@
 - `docs/prd/phases/phase-0-prd.md`：Phase 0 文档与真源收敛
 - `docs/prd/phases/phase-1-prd.md`：Phase 1 人工闭环（Local-First）
 - `docs/prd/phases/phase-2-prd.md`：Phase 2 最小 Lead 自动化
+- `docs/prd/phases/phase-2-1-prd.md`：Phase 2.1 Lead 控制台（Bubble Tea TUI）
+- `docs/prd/phases/phase-2-5-prd.md`：Phase 2.5 Reviewer-Lead 调度增强
+- `docs/prd/phases/phase-2-6-prd.md`：Phase 2.6 并发执行隔离（Git Worktree）
+- `docs/prd/phases/phase-2-7-prd.md`：Phase 2.7 真实 Worker 接入与 Wrapper 归一化
 - `docs/prd/phases/phase-3-prd.md`：Phase 3 质量与 PR/CI 自动化增强
 
 埋点 PRD：

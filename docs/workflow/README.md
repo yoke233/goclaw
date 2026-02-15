@@ -37,6 +37,7 @@ V1/V1.1 本项目的关键选择（先记住这几条，其它都是细节）：
 - `docs/workflow/templates/comment.md`：Comment 模板
 - `docs/workflow/templates/pr.md`：PR 描述模板（可选但推荐）
 - `docs/workflow/spec-consistency.md`：如何把「规格一致性」做成机制（含已发现的漂移点）
+- `docs/workflow/guardrails.md`：常见问题与护栏（并行审查、多 worker、幂等与回填）
 
 说明：
 
