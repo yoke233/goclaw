@@ -236,6 +236,35 @@ Lead 必须维护“每个 WorkUnit 的当前 active run_id”。
 
 这样可以避免“旧 worker 的迟到输出把状态冲回去”。
 
+示意图（Mermaid；不支持 Mermaid 的阅读器会将其视为普通代码块）：
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Outbox as Outbox(Issue/Thread)
+  participant Lead as Lead(控制平面)
+  participant W1 as Worker-A(执行器)
+  participant W2 as Worker-B(执行器)
+
+  Note over Lead: WorkUnit = IssueRef(issue_ref)\n每次 spawn => new RunId(run_id)
+
+  Lead->>W1: spawn WorkOrder(issue_ref, run_id=R1)
+  Note over Lead,W1: active_run_id = R1
+
+  W1-->>Lead: WorkResult(issue_ref, run_id=R1, status=blocked)
+  Lead->>Outbox: writeback(normalize)\nTrigger: workrun:R1\nStatus: blocked
+
+  Note over Lead: 触发切换：超时/卡死/changes_requested/环境不匹配...
+  Lead->>W2: spawn WorkOrder(issue_ref, run_id=R2)
+  Note over Lead,W2: switch worker => active_run_id = R2
+
+  W1-->>Lead: (late) WorkResult(issue_ref, run_id=R1, status=ok)
+  Note over Lead: run_id != active_run_id\n=> 忽略(不自动写回 Outbox)\n可归档/人工审阅
+
+  W2-->>Lead: WorkResult(issue_ref, run_id=R2, status=ok)
+  Lead->>Outbox: writeback(normalize)\nTrigger: workrun:R2\nStatus: ok
+```
+
 ### 4.3 切换触发点（建议）
 
 允许切换 worker 的常见原因：
