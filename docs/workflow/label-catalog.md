@@ -65,6 +65,30 @@
 
 - `contract:breaking`：接口破坏性变更风险（通常由 architect/integrator 使用）
 
+## 标签多重性（Multiplicity）
+
+说明：底层承载系统（GitHub/GitLab/SQLite）通常允许一个 Issue 拥有多个 labels，但在本协议中不同命名空间的 labels 有不同“多选/互斥”语义。
+
+允许多选（可以同时存在多个）：
+
+- 路由标签：`to:*`
+  - 例：`to:backend` + `to:qa`（并行关注/并行处理）
+- 控制标签：`needs-human`、`autoflow:off`
+  - 例：既需要人类介入，也关闭自动流转
+- 契约扩展：`contract:*`
+  - 允许同时存在多个风险标签（若项目扩展出更多 `contract:*`）
+
+建议互斥（同一时刻最多一个；若出现多个，需由 lead/integrator normalize）：
+
+- 状态标签：`state:*`（`state:todo/doing/blocked/review/done` 只能存在一个）
+- 类型标签：`kind:*`（`kind:task/bug/...` 只能存在一个）
+- 优先级标签：`prio:*`（`prio:p0/p1/p2/p3` 只能存在一个）
+- 决策标签：`decision:*`（`decision:proposed/accepted/rejected` 只能存在一个）
+
+备注：
+
+- 若后续引入质量类标签（例如 `review:*`），也应视为互斥集合（同一时刻最多一个结论）。
+
 ## 监听矩阵（默认）
 
 说明：
